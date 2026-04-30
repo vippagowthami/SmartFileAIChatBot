@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data and logs
+data/chroma_db/
+data/chat_history.json
+data/indexed_files.json
+data/test_upload_ui.txt
+logs/
+backend/data/
+backend/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB
+.chroma/
+
+# Temporary files
+*.tmp
+*.temp

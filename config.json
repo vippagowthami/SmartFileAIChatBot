@@ -1,0 +1,38 @@
+{
+  "development": {
+    "backend_url": "http://localhost:8000",
+    "frontend_port": 8080,
+    "ollama_base_url": "http://localhost:11434",
+    "default_model": "llama2",
+    "debug": true
+  },
+  "rag_config": {
+    "chunk_size": 500,
+    "chunk_overlap": 100,
+    "num_retrieval": 5,
+    "temperature": 0.7,
+    "top_p": 0.9
+  },
+  "database": {
+    "type": "chromadb",
+    "path": "./data/chroma_db",
+    "collection_name": "documents",
+    "embedding_model": "ollama"
+  },
+  "logging": {
+    "log_dir": "./logs",
+    "log_level": "INFO",
+    "log_format": "json"
+  },
+  "file_processing": {
+    "supported_formats": [".pdf", ".docx", ".txt"],
+    "max_file_size_mb": 50,
+    "encoding": "utf-8"
+  },
+  "cors": {
+    "allow_origins": ["*"],
+    "allow_credentials": true,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"]
+  }
+}

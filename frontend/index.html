@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart File AI Chatbot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>Smart File AI</h1>
+                <p class="subtitle">Local LLM + RAG</p>
+            </div>
+
+            <button class="new-chat-btn" onclick="newChat()">
+                <span>+ New Chat</span>
+            </button>
+
+            <button class="new-chat-btn" style="background: #5e6f8f; margin-top: 8px;" onclick="showChatHistory()">
+                <span>📋 History</span>
+            </button>
+
+            <div class="sidebar-section">
+                <h3>Documents</h3>
+                <div id="documents-list" class="documents-list">
+                    <p class="empty-state">No documents uploaded</p>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Statistics</h3>
+                <div id="stats" class="stats-box">
+                    <p class="stat"><strong>Documents:</strong> <span id="doc-count">0</span></p>
+                    <p class="stat"><strong>Indexed Files:</strong> <span id="indexed-file-count">0</span></p>
+                    <p class="stat"><strong>Chunks:</strong> <span id="chunk-count">0</span></p>
+                    <p class="stat"><strong>Model:</strong> <span id="model-name">llama2</span></p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Main Chat Area -->
+        <div class="main-content">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-content">
+                    <h2>Chat Assistant</h2>
+                    <p id="status-indicator" class="status">Connecting...</p>
+                </div>
+                <button class="settings-btn" onclick="toggleSettings()">⚙️</button>
+            </div>
+
+            <!-- Chat Container -->
+            <div id="chat-container" class="chat-container">
+                <div class="welcome-message">
+                    <h2>Welcome to Smart File AI Chatbot</h2>
+                    <p>Upload documents to get started. Ask questions and get answers powered by local LLM + RAG.</p>
+                    <div class="welcome-tips">
+                        <p><strong>Tips:</strong></p>
+                        <ul>
+                            <li>Upload PDF, DOC, or TXT files</li>
+                            <li>Ask questions about your documents</li>
+                            <li>Response times are tracked and displayed</li>
+                            <li>All processing happens locally - no internet required</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-section">
+                <!-- File Upload -->
+                <div class="upload-section">
+                    <label for="file-input" class="upload-label">
+                        📎 Attach File
+                    </label>
+                    <input 
+                        type="file" 
+                        id="file-input" 
+                        accept=".pdf,.doc,.docx,.txt"
+                        onchange="handleFileUpload(event)"
+                    >
+                    <div id="upload-progress" class="upload-progress hidden">
+                        <div class="upload-progress-ring">
+                            <div id="upload-progress-ring-fill" class="upload-progress-ring-fill"></div>
+                            <div class="upload-progress-ring-inner">
+                                <span id="upload-progress-percent">0%</span>
+                            </div>
+                        </div>
+                        <div class="upload-progress-content">
+                            <div id="upload-progress-text" class="upload-progress-text">Ready to upload</div>
+                            <div id="upload-progress-subtext" class="upload-progress-subtext"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input -->
+                <div class="chat-input-section">
+                    <div class="chat-input-wrapper">
+                        <input 
+                            type="text" 
+                            id="message-input" 
+                            class="chat-input" 
+                            placeholder="Ask me anything..."
+                            onkeydown="handleKeyPress(event)"
+                        >
+                        <button class="send-btn" onclick="sendMessage()">
+                            <span id="send-icon">➤</span>
+                        </button>
+                    </div>
+                    <div class="input-options">
+                        <label class="rag-toggle">
+                            <input type="checkbox" id="use-rag" checked>
+                            <span>Use RAG (retrieve context)</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Settings</h2>
+                    <button class="close-btn" onclick="toggleSettings()">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="settings-group">
+                        <label>LLM Model:</label>
+                        <select id="model-select" onchange="changeModel()">
+                            <option value="llama2">Llama 2</option>
+                            <option value="mistral">Mistral</option>
+                            <option value="neural-chat">Neural Chat</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>Theme:</label>
+                        <select id="theme-select">
+                            <option value="light">Light Mode</option>
+                            <option value="dark">Dark Mode</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>RAG Retrieval Documents:</label>
+                        <input type="number" id="num-retrieval" value="5" min="1" max="10">
+                    </div>
+                    <div class="settings-group">
+                        <label>Backend URL:</label>
+                        <input type="text" id="backend-url" value="http://127.0.0.1:8001">
+                    </div>
+                    <div class="settings-group">
+                        <label>AI Creativity (Temperature):</label>
+                        <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.1" oninput="document.getElementById('temp-value').innerText = this.value">
+                        <span id="temp-value" style="font-size:12px;color:var(--light-text);float:right">0.1</span>
+                    </div>
+                    <div class="settings-group" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color);">
+                        <button class="clear-db-btn" style="width:100%" onclick="clearDatabase(); toggleSettings();">
+                            🗑️ Clear Database (All Documents)
+                        </button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-primary" onclick="saveSettings()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
