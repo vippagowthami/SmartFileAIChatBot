@@ -16,7 +16,7 @@ Smart File AI Chatbot is a local document chat app built with FastAPI, Ollama, C
 - `frontend/` - Browser chat interface
 - `data/` - Local app data and vector storage
 - `logs/` - JSON chat logs
-- `run_all.py` and `start_*.bat/.sh` - Startup helpers
+- `run_all.py` - Startup helper
 
 ## Requirements
 

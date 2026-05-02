@@ -47,6 +47,13 @@ def normalize_query(user_input: str) -> str:
     for pat, rep in replacements.items():
         normalized = re.sub(pat, rep, normalized, flags=re.IGNORECASE)
 
+    # If the input is a casual greeting/thank-you/bye, do not turn it into a definition.
+    casual_tokens = {"hi", "hello", "hey", "heyy", "hiya", "thanks", "thank", "thankyou", "thx", "ty", "bye", "goodbye", "yaar", "buddy", "mate", "dude", "bruh"}
+    tokens = [t for t in re.split(r"\s+", normalized) if t]
+    if tokens and all(t in casual_tokens for t in tokens):
+        # Return normalized but don't wrap it into a 'what is' question
+        return normalized
+
     # Expand "corba adv" / "corba advantages"
     normalized = re.sub(r"\bcorba\s+adv\b", "advantages of corba", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\badv\s+of\s+corba\b", "advantages of corba", normalized, flags=re.IGNORECASE)

@@ -4,7 +4,10 @@ import os
 
 import requests
 
-from text_vectorizer import tokenize, vectorize_text
+try:
+    from .text_vectorizer import tokenize, vectorize_text
+except Exception:
+    from text_vectorizer import tokenize, vectorize_text
 
 
 class OllamaLLM:
@@ -145,32 +148,22 @@ class OllamaLLM:
         }.get(verbosity, "Give a clear, structured answer.")
 
         system_message = (
-            "You are Smart File AI Chat, an intelligent assistant that answers user questions using uploaded documents and general knowledge.\n\n"
-            "STRICT RULES:\n"
-            "1. PRIORITY: DOCUMENT-BASED ANSWERS (RAG)\n"
-            "   - If the answer is found in the context: Answer ONLY using that information. Do NOT add external knowledge. Include (src: filename).\n"
-            "2. IF CONTEXT IS INSUFFICIENT OR PARTIAL:\n"
-            "   - First say: 'The uploaded files do not fully contain the answer.'\n"
-            "   - Then provide a general answer using your knowledge.\n"
-            "   - Format:\n"
-            "     [From Files]\n"
-            "     <document-based answer> (src: filename)\n\n"
-            "     [General Answer]\n"
-            "     <general knowledge answer>\n"
-            "3. IF NO RELEVANT CONTEXT AT ALL:\n"
-            "   - Skip the 'From Files' section completely.\n"
-            "   - Provide a clear general answer.\n"
-            "4. STYLE:\n"
-            "   - Clear, structured, bullet points, concise, simple language.\n"
-            "   - Do NOT say 'I am busy' or give vague answers.\n"
-            f"5. ADAPT:\n   - Intent: {intent}\n   - {length_hint}\n"
+            "You are Smart File AI Chat, a local assistant answering questions ONLY from provided documents.\n\n"
+            "STRICT RULES (MANDATORY):\n"
+            "1) ANSWER ONLY FROM DOCUMENT CONTEXT. Do NOT use external knowledge or hallucinate.\n"
+            "2) If the question is answered in the documents, extract the answer verbatim and add citation: (src: filename)\n"
+            "3) If documents do NOT contain the answer, respond with: 'The uploaded documents do not contain information about this topic.'\n"
+            "4) NEVER guess, infer, or add information not explicitly in the documents.\n"
+            "5) Format: Clear bullet points or short paragraphs. Include citations for all claims.\n"
+            f"Intent: {intent}. {length_hint}\n\n"
+            "Remember: If unsure, say so. Never fabricate."
         )
 
         full_prompt = (
             f"{system_message}\n\n"
             f"DOCUMENT CONTEXT:\n{context}\n\n"
-            f"USER QUESTION: {prompt}\n\n"
-            f"ANSWER:"
+            f"QUESTION: {prompt}\n\n"
+            f"ANSWER (from documents only):"
         )
 
         try:
@@ -181,10 +174,10 @@ class OllamaLLM:
                     "prompt": full_prompt,
                     "stream": False,
                     "options": {
-                        "temperature": temperature,
-                        "top_p": 0.9,
-                        "num_predict": 600,
-                    },
+                            "temperature": temperature,
+                            "top_p": 0.9,
+                        "num_predict": 2000,
+                        },
                 },
                 timeout=120,
             )
@@ -192,8 +185,21 @@ class OllamaLLM:
             generated = response.json().get("response", "").strip()
             generated = self._clean_response(generated)
 
+            # If the model produced a refusal-like string, prefer a safe document snippet instead
+            lower_g = (generated or "").lower()
+            refusal_like = self._is_refusal(generated) or bool(re.search(r"\bi cannot answer\b|\bi am unable to\b|\bi cannot provide\b", lower_g))
+
             if generated and len(generated) > 10 and not self._is_refusal(generated):
                 sources = self._extract_sources_from_context(context)
+
+                # If we have document sources but the generated text looks short
+                # or does not end cleanly, append a safe document snippet so
+                # the user always receives a complete answer.
+                if sources and (not generated.endswith(('.', '!', '?')) or len(generated) < 300 or re.search(r"\w-$", generated)):
+                    fallback_snippet = self._fallback_document_answer(prompt, context)
+                    combined = generated.rstrip() + "...\n\n" + fallback_snippet
+                    return self._enforce_rag_response_format(combined, sources)
+
                 return self._enforce_rag_response_format(generated, sources)
         except Exception:
             pass
@@ -230,6 +236,7 @@ class OllamaLLM:
             "You are Smart File AI Chat.\n"
             "Write like an advanced conversational AI (ChatGPT/Claude style): natural, helpful, and non-robotic.\n"
             "Always answer the user's question directly (no deflection).\n"
+            "If the question asks for a factual person/place/date/definition, answer the exact fact first and then add one short sentence of context.\n"
             "Do NOT mention limitations/capabilities.\n"
             f"Intent: {intent}. {length_hint}"
         )
@@ -273,11 +280,14 @@ class OllamaLLM:
                 "Do NOT ask follow-up questions for simple 'what is' / 'define' questions.\n"
                 "Do NOT say you are limited, refuse, or mention capabilities.\n"
                 "Write a natural, human-like answer (not a rigid template).\n"
+                "Avoid placeholder text like 'concise description', 'key points', or generic filler.\n"
+                "If the question is asking for a factual answer, give the exact fact first instead of a template.\n"
+                "If the question asks for a definition, begin with a one-sentence definition and then add 2-4 concrete facts or examples.\n"
                 f"Intent: {intent}. Length: {verbosity}.\n"
                 "Be concise but complete for the requested length."
             )
             strict_prompt = f"{strict_system}\n\nQUESTION: {prompt}\n\nANSWER:"
-            regenerated = _call_ollama(strict_prompt, min(0.2, temperature), token_budget + 120)
+            regenerated = _call_ollama(strict_prompt, min(0.2, temperature), token_budget + 400)
 
             if regenerated and len(regenerated) > 15 and not self._is_refusal(regenerated):
                 if not self._is_low_quality_answer(regenerated, prompt):
@@ -291,28 +301,61 @@ class OllamaLLM:
     # Helpers
     # ------------------------------------------------------------------ #
     def _is_greeting_prompt(self, prompt: str) -> bool:
-        # Collapse repeating characters (e.g., 'hellooo' -> 'helo') and remove punctuation
-        normalized = re.sub(r"([a-z])\1+", r"\1", prompt.strip().lower())
-        normalized = re.sub(r"[^a-z\s]", "", normalized).strip()
-        
+        # More robust greeting detection for short, casual inputs.
+        s = (prompt or "").strip()
+        if not s:
+            return True
+
+        # If the prompt is long, don't treat it as a greeting.
+        if len(s) > 60:
+            return False
+
+        # Normalize repeated letters and non-alpha chars
+        normalized = re.sub(r"([a-z])\1+", r"\1", s.lower())
+        normalized = re.sub(r"[^a-z\s]", " ", normalized).strip()
+        tokens = [t for t in normalized.split() if t]
+
         greetings = {
             "hi", "hello", "hey", "helo", "hy", "hlo",
-            "good morning", "good afternoon", "good evening",
-            "thanks", "thank you", "thx", "ty",
+            "morning", "afternoon", "evening",
+            "thanks", "thank", "thankyou", "thx", "ty",
+            "bye", "goodbye", "farewell",
         }
-        return normalized in greetings or any(normalized.startswith(g + " ") for g in greetings)
+
+        casual = {"yaar", "buddy", "mate", "bruh", "dude"}
+
+        if not tokens:
+            return False
+
+        # If all tokens are greetings or casual words, treat as greeting
+        if all(t in greetings or t in casual for t in tokens):
+            return True
+
+        # Short messages where the first token is a greeting are also greetings
+        if len(tokens) <= 3 and tokens[0] in greetings:
+            return True
+
+        return False
 
     def _greeting_response(self, prompt: str) -> str:
-        lower = prompt.strip().lower()
-        if lower in {"thanks", "thank you"}:
-            return "You're welcome! Feel free to ask anything else."
+        lower = (prompt or "").strip().lower()
+        if any(t in lower for t in ("thanks", "thank you", "thx", "ty")):
+            return "You’re welcome — glad to help! Anything else you want to ask?"
+        if any(t in lower for t in ("bye", "goodbye", "farewell", "see you", "see ya")):
+            return "Goodbye! Come back anytime if you need more help."
         if "morning" in lower:
-            return "Good morning! How can I help you today?"
+            return "Good morning! What can I help you with today?"
         if "afternoon" in lower:
-            return "Good afternoon! How can I help you today?"
+            return "Good afternoon! What can I help you with today?"
         if "evening" in lower:
-            return "Good evening! How can I help you today?"
-        return "Hello! Ask a question, or upload a document and I’ll answer using it."
+            return "Good evening! What can I help you with today?"
+
+        # Casual greetings
+        if any(c in lower for c in ("yaar", "buddy", "mate", "dude", "bruh")):
+            return "Hey! I’m here — how can I help you today?"
+
+        # Default friendly greeting
+        return "Hi there! I’m Smart File AI — ask me a question or upload a document and I’ll help." 
 
     def _clean_response(self, text: str) -> str:
         """Removes trailing refusal appendages generated by over-aligned models."""
@@ -371,6 +414,10 @@ class OllamaLLM:
             "i cannot provide a detailed explanation",
             "i cannot answer questions about programming",
             "is an important concept with several key aspects",
+            "concise description of what",
+            "the primary purpose, common use cases",
+            "a short real-world example illustrating",
+            "typical scenarios or problems where",
         ]
         if any(m in a for m in bad_markers):
             return True
@@ -401,20 +448,21 @@ class OllamaLLM:
             "this request cannot be fulfilled",
             "i cannot fulfill this request",
             "my current capabilities are limited",
-            "i am sorry, but i cannot assist",
+            "i cannot provide a detailed explanation",
+            "i cannot answer questions",
             "i'm sorry, but i cannot assist",
             "i am a smart file ai assistant",
-            "i cannot provide a detailed explanation",
             "i cannot answer questions about programming concepts",
             "my capabilities are limited to assisting",
         ]
-        
+
         if any(lower.startswith(s) for s in starts):
             return True
-            
+
         # Hard refusal phrases that are almost always refusals
         hard_refusals = [
             "i apologize, but i cannot",
+            "i cannot answer",
             "i'm sorry, i cannot",
             "i am sorry, i cannot",
             "i am sorry, but i cannot",
@@ -464,7 +512,7 @@ class OllamaLLM:
                 best_source = current_source
 
         if best_text and best_score > 1:
-            snippet = best_text[:500].strip()
+            snippet = best_text[:1000].strip()
             label = best_source if best_source else "the document"
             return f"Based on {label}:\n\n{snippet}"
 
@@ -502,6 +550,15 @@ class OllamaLLM:
                 "Its rich ecosystem of libraries (NumPy, Pandas, TensorFlow, Django) makes it a top choice for developers."
             )
 
+        if "prime minister of india" in lower or re.fullmatch(r"who is (the )?(pm|prime minister) of india\??", lower):
+            return "The Prime Minister of India is Narendra Modi."
+
+        if "capital of india" in lower:
+            return "The capital of India is New Delhi."
+
+        if "president of india" in lower:
+            return "The President of India is Droupadi Murmu."
+
         # High-quality deterministic mini-answers for common programming topics
         if "java" == lower.strip() or lower.startswith("what is java") or lower.startswith("define java"):
             return (
@@ -535,20 +592,20 @@ class OllamaLLM:
                     "Tell me the word/term you want defined, and I’ll define it with a short example."
                 )
             return (
-                f"{term.capitalize()} — quick definition:\n"
-                f"- Meaning: {term} is a term/concept used to describe a specific idea or system.\n"
-                f"- Key points: what it does, where it’s used, and why it matters.\n"
-                f"- Example: a simple real-world example to make it concrete.\n"
+                f"{term.capitalize()} is a topic that is typically defined by what it is, how it works, and where it is used.\n\n"
+                f"- Definition: a short, direct explanation of {term}.\n"
+                f"- Why it matters: the practical reason people use or study {term}.\n"
+                f"- Example: one concrete example that makes {term} easier to understand.\n"
             )
 
         # Always provide a useful general answer even without documents.
         return (
-            f"Here’s a clear general explanation of “{cleaned}”.\n\n"
-            "- Definition: What it is, in simple terms.\n"
-            "- Key points: The most important parts and why they matter.\n"
-            "- Example: A small real-world example.\n"
-            "- When to use it: Common scenarios.\n\n"
-            "If you tell me your level (beginner/intermediate) and your goal, I can tailor it."
+            f"Here’s a clear general explanation of '{cleaned}'.\n\n"
+            "- Definition: the core meaning or idea.\n"
+            "- How it works: the main mechanism or concept.\n"
+            "- Example: one practical example.\n"
+            "- Takeaway: why it matters or when to use it.\n\n"
+            "If you want, I can also give a beginner-friendly version, a comparison, or a step-by-step explanation."
         )
 
     def list_available_models(self) -> list[str]:

@@ -3,21 +3,22 @@
     "backend_url": "http://localhost:8000",
     "frontend_port": 8080,
     "ollama_base_url": "http://localhost:11434",
-    "default_model": "llama2",
+    "default_model": "functiongemma",
     "debug": true
   },
   "rag_config": {
-    "chunk_size": 500,
-    "chunk_overlap": 100,
-    "num_retrieval": 5,
-    "temperature": 0.7,
-    "top_p": 0.9
+    "chunk_size": 600,
+    "chunk_overlap": 120,
+    "num_retrieval": 3,
+    "temperature": 0.1,
+    "top_p": 0.9,
+    "relevance_threshold": 0.45
   },
   "database": {
     "type": "chromadb",
     "path": "./data/chroma_db",
     "collection_name": "documents",
-    "embedding_model": "ollama"
+    "embedding_model": "all-minilm"
   },
   "logging": {
     "log_dir": "./logs",
@@ -25,9 +26,11 @@
     "log_format": "json"
   },
   "file_processing": {
-    "supported_formats": [".pdf", ".docx", ".txt"],
+    "supported_formats": [".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"],
     "max_file_size_mb": 50,
-    "encoding": "utf-8"
+    "encoding": "utf-8",
+    "chunk_size_tokens": 600,
+    "chunk_overlap_tokens": 120
   },
   "cors": {
     "allow_origins": ["*"],

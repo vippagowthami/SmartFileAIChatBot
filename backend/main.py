@@ -7,13 +7,26 @@ import tempfile
 import re
 from pathlib import Path
 from typing import Any
+import sys
+import socket
 
-from llm import OllamaLLM
-from db import VectorDatabase
-from rag import RAGPipeline
-from logger import ConversationLogger
-from persistence import JsonPersistence
-from query_understanding import understand_query
+if __package__ in (None, ""):
+    package_root = Path(__file__).resolve().parent.parent
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    from backend.llm import OllamaLLM
+    from backend.db import VectorDatabase
+    from backend.rag import RAGPipeline
+    from backend.logger import ConversationLogger
+    from backend.persistence import JsonPersistence
+    from backend.query_understanding import understand_query
+else:
+    from .llm import OllamaLLM
+    from .db import VectorDatabase
+    from .rag import RAGPipeline
+    from .logger import ConversationLogger
+    from .persistence import JsonPersistence
+    from .query_understanding import understand_query
 
 
 # ------------------------------------------------------------------ #
@@ -41,19 +54,46 @@ db = VectorDatabase(db_path="./data/chroma_db")
 rag = RAGPipeline(
     llm=llm,
     db=db,
-    chunk_size=1500,
-    chunk_overlap=200,
-    num_retrieval=5,
-    relevance_threshold=0.20,
+    chunk_size=600,
+    chunk_overlap=120,
+    num_retrieval=3,
+    relevance_threshold=0.45,
 )
 conversation_logger = ConversationLogger(log_dir="./logs")
 indexed_files_store = JsonPersistence("./data/indexed_files.json", {"files": []})
 chat_history_store = JsonPersistence("./data/chat_history.json", {"messages": []})
+conversation_memory = {}  # Per-session memory: {session_id: [last_messages]}
 
 
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
+def _get_conversation_context(session_id: str, max_messages: int = 2) -> str:
+    """Retrieve last N messages for conversation continuity."""
+    if session_id not in conversation_memory:
+        return ""
+    
+    messages = conversation_memory[session_id][-max_messages:]
+    if not messages:
+        return ""
+    
+    context = "Previous conversation:\n"
+    for msg in messages:
+        context += f"- {msg}\n"
+    return context
+
+
+def _save_to_conversation_memory(session_id: str, message: str, max_memory: int = 5) -> None:
+    """Save message to conversation memory."""
+    if session_id not in conversation_memory:
+        conversation_memory[session_id] = []
+    
+    conversation_memory[session_id].append(message)
+    # Keep only recent messages
+    if len(conversation_memory[session_id]) > max_memory:
+        conversation_memory[session_id] = conversation_memory[session_id][-max_memory:]
+
+
 def _is_temp_upload_name(filename: str) -> bool:
     name = (filename or "").strip().lower()
     return bool(re.match(r"^tmp[_a-z0-9]{6,}\.(txt|pdf|doc|docx)$", name))
@@ -314,18 +354,37 @@ async def save_chat_history(payload: ChatHistoryPayload):
 # ------------------------------------------------------------------ #
 # Entry point
 # ------------------------------------------------------------------ #
+def _find_available_port(preferred_port: int = 8000, host: str = "127.0.0.1", max_attempts: int = 20) -> int:
+    port = preferred_port
+    for _ in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+                return port
+            except OSError:
+                port += 1
+    return preferred_port
+
+
 if __name__ == "__main__":
     import uvicorn
 
+    preferred_port = int(os.getenv("PORT", "8000"))
+    selected_port = _find_available_port(preferred_port)
+
     print("=" * 60)
-    print("Smart File AI Chatbot - FastAPI Server v2.0")
+    print("Smart File AI Chatbot - FastAPI Server v2.1 (Local LLM)")
     print("=" * 60)
     print(f"Model      : {llm.model}")
     print(f"Embeddings : {llm.embedding_model}")
     print(f"Database   : {db.db_path}")
-    print(f"Chunk size : {rag.chunk_size} chars  Overlap: {rag.chunk_overlap}")
-    print(f"Retrieval  : top-{rag.num_retrieval}  Threshold: {rag.relevance_threshold}")
-    print("Starting server on http://127.0.0.1:8001")
+    print(f"Chunk size : {rag.chunk_size} tokens  Overlap: {rag.chunk_overlap} tokens")
+    print(f"Retrieval  : top-{rag.num_retrieval} (strict)  Threshold: {rag.relevance_threshold}")
+    print(f"Supported formats: PDF, DOCX, TXT, CSV, JSON, XLSX")
+    print(f"Starting server on http://127.0.0.1:{selected_port}")
+    if selected_port != preferred_port:
+        print(f"Port {preferred_port} is busy, using {selected_port} instead")
     print("=" * 60)
 
-    uvicorn.run(app, host="127.0.0.1", port=8001, reload=False, access_log=True)
+    uvicorn.run(app, host="127.0.0.1", port=selected_port, reload=False, access_log=True)
