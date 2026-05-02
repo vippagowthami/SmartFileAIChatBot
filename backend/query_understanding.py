@@ -58,9 +58,18 @@ def normalize_query(user_input: str) -> str:
     normalized = re.sub(r"\bcorba\s+adv\b", "advantages of corba", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\badv\s+of\s+corba\b", "advantages of corba", normalized, flags=re.IGNORECASE)
 
-    # If the user gives a single keyword/term, turn into a definition question.
+    # If the user gives a short topic term, turn it into a definition question.
+    # Keep acknowledgments and ultra-short fillers like "yes", "ok", "k", "what", "y", or "uhmm" from becoming fake definitions.
+    short_non_topics = {
+        "y", "k", "ok", "okay", "yes", "no", "nah", "nope", "sure", "fine", "cool", "alright",
+        "what", "why", "how", "uhm", "uhmm", "um", "hmm", "hm", "idk", "okayyy", "okayy",
+    }
     if re.fullmatch(r"[a-z0-9][a-z0-9 \-_/]{0,40}", normalized) and len(normalized.split()) <= 3:
-        # If it already starts with "what/define", don't wrap again.
+        tokens = normalized.split()
+        if len(tokens) == 1 and (len(normalized) <= 2 or normalized in short_non_topics):
+            return q
+        if normalized in short_non_topics:
+            return q
         if not normalized.startswith(("what ", "define ", "explain ", "why ", "how ")):
             normalized = f"what is {normalized}?"
 

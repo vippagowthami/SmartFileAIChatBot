@@ -28,9 +28,31 @@ document.addEventListener("DOMContentLoaded", () => {
         if (sessionMsgs.length > 0) { loadChatSession(saved); return; }
     }
     newChat();
+    setSidebarPane('documents');
     updateStatistics();
     setInterval(updateStatistics, 30000);
 });
+
+function setSidebarPane(pane) {
+    const docsPane = document.getElementById('pane-documents');
+    const statsPane = document.getElementById('pane-statistics');
+    const docsBtn = document.getElementById('menu-documents');
+    const statsBtn = document.getElementById('menu-statistics');
+    if (!docsPane || !statsPane || !docsBtn || !statsBtn) return;
+
+    if (pane === 'statistics') {
+        docsPane.classList.add('hidden');
+        statsPane.classList.remove('hidden');
+        docsBtn.classList.remove('active');
+        statsBtn.classList.add('active');
+        return;
+    }
+
+    statsPane.classList.add('hidden');
+    docsPane.classList.remove('hidden');
+    statsBtn.classList.remove('active');
+    docsBtn.classList.add('active');
+}
 
 // ==================== Health ====================
 async function checkHealth() {
@@ -496,6 +518,7 @@ function saveChatMessage(content, type, data) {
     localStorage.setItem("chatHistory", JSON.stringify(chatHistory));
     localStorage.setItem("currentChatId", currentChatId);
     syncChatHistoryToBackend();
+    renderRecentChats();
 }
 
 async function loadChatHistory() {
@@ -515,11 +538,121 @@ async function loadChatHistory() {
                     chatHistory = data.messages;
                 }
                 localStorage.setItem("chatHistory", JSON.stringify(chatHistory));
+                renderRecentChats();
                 return;
             }
         }
     } catch {}
     chatHistory = local;
+    renderRecentChats();
+}
+
+// Render recent chats into the sidebar recent-chats list
+function renderRecentChats() {
+    const container = document.getElementById('recent-chats');
+    if (!container) return;
+    // collect latest chat sessions by id
+    const grouped = {};
+    chatHistory.forEach(msg => {
+        if (!grouped[msg.chatId]) grouped[msg.chatId] = [];
+        grouped[msg.chatId].push(msg);
+    });
+
+    const entries = Object.keys(grouped).reverse();
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="list-empty">No recent chats</div>';
+        return;
+    }
+
+    container.innerHTML = entries.map((chatId, index) => {
+        const msgs = grouped[chatId];
+        const firstUser = msgs.find(m => m.type === 'user');
+        const rawTitle = firstUser ? firstUser.content : `Chat ${entries.length - index}`;
+        const safeTitle = escapeHtml(String(rawTitle).trim());
+        const title = safeTitle.length > 0 ? safeTitle.substring(0, 40) : `Chat ${entries.length - index}`;
+        const preview = new Date(msgs[0].timestamp).toLocaleDateString();
+        const active = (chatId === currentChatId) ? 'active' : 'inactive';
+        return `<div class="chat-item ${active}" data-chat-id="${chatId}" onclick="onSelectChat(event)">
+                    <div class="chat-main">
+                        <div class="chat-title" title="${safeTitle}">${title}</div>
+                        <div class="chat-preview">${preview}</div>
+                    </div>
+                    <div class="chat-actions" onclick="event.stopPropagation()">
+                        <button class="chat-more-btn" title="Chat options" onclick="toggleChatMenu(event, '${chatId}')">⋯</button>
+                        <div class="chat-menu" id="chat-menu-${chatId}">
+                            <button class="chat-menu-item" onclick="shareChatSession(event, '${chatId}')">Share</button>
+                            <button class="chat-menu-item" onclick="deleteChatSessionById(event, '${chatId}')">Delete</button>
+                            <button class="chat-menu-item" onclick="showChatHistory()">More options</button>
+                        </div>
+                    </div>
+                </div>`;
+    }).join('');
+}
+
+function onSelectChat(event) {
+    const el = event.currentTarget || event.target.closest('.chat-item');
+    if (!el) return;
+    const chatId = el.getAttribute('data-chat-id');
+    if (!chatId) return;
+    loadChatSession(chatId);
+    // update active classes
+    document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+}
+
+function toggleChatMenu(event, chatId) {
+    event.stopPropagation();
+    const menu = document.getElementById(`chat-menu-${chatId}`);
+    if (!menu) return;
+    const isOpen = menu.classList.contains('open');
+    closeAllChatMenus();
+    if (!isOpen) menu.classList.add('open');
+}
+
+function closeAllChatMenus() {
+    document.querySelectorAll('.chat-menu.open').forEach(menu => menu.classList.remove('open'));
+}
+
+function deleteChatSessionById(event, chatId) {
+    event.stopPropagation();
+    deleteChatSession(chatId);
+    closeAllChatMenus();
+}
+
+async function shareChatSession(event, chatId) {
+    event.stopPropagation();
+    const messages = chatHistory.filter(m => m.chatId === chatId);
+    const firstUser = messages.find(m => m.type === 'user');
+    const heading = firstUser?.content || 'Shared chat';
+    const content = messages
+        .map(m => `${m.type.toUpperCase()}: ${String(m.content).replace(/<[^>]*>/g, '')}`)
+        .join('\n\n');
+    const text = `${heading}\n\n${content}`;
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const temp = document.createElement('textarea');
+            temp.value = text;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            temp.remove();
+        }
+        setStatus('Chat copied to clipboard', 'connected');
+    } catch {
+        setStatus('Unable to copy chat', 'error');
+    }
+    closeAllChatMenus();
+}
+
+function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function syncChatHistoryToBackend() {
@@ -529,6 +662,10 @@ function syncChatHistoryToBackend() {
         body: JSON.stringify({ messages: chatHistory }),
     }).catch(() => {});
 }
+
+document.addEventListener('click', () => {
+    closeAllChatMenus();
+});
 
 function showChatHistory() {
     const existing = document.getElementById("history-modal");
@@ -588,6 +725,7 @@ function deleteChatSession(chatId, btnEl) {
     if (currentChatId === chatId) {
         newChat();
     }
+    renderRecentChats();
 }
 
 function clearAllChatHistory() {
@@ -603,6 +741,7 @@ function clearAllChatHistory() {
     
     newChat();
     addMessageToChat("🗑️ All chat history has been deleted.", "ai");
+    renderRecentChats();
 }
 
 function loadChatSession(chatId) {
@@ -641,4 +780,5 @@ function newChat() {
             </div>
         </div>`;
     document.getElementById("message-input").focus();
+    renderRecentChats();
 }

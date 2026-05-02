@@ -9,38 +9,50 @@
 <body>
     <div class="container">
         <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h1>Smart File AI</h1>
-                <p class="subtitle">Local LLM + RAG</p>
+        <aside class="sidebar sidebar-component" aria-label="Sidebar">
+            <div class="sidebar-top">
+                <div class="brand">
+                    <h1 class="brand-title">Smart File AI</h1>
+                    <p class="brand-sub">Local LLM + RAG</p>
+                </div>
+                <button class="btn-new-chat" onclick="newChat()">+ New Chat</button>
             </div>
 
-            <button class="new-chat-btn" onclick="newChat()">
-                <span>+ New Chat</span>
-            </button>
+            <div class="sidebar-section recent-chats-section">
+                <h3 class="section-title">Recent Chats</h3>
+                <div id="recent-chats" class="chat-list" tabindex="0" aria-label="Recent chats list">
+                    <!-- Recent chats are rendered here by script.js -->
+                    <div class="list-empty">No recent chats</div>
+                </div>
+            </div>
 
-            <button class="new-chat-btn" style="background: #5e6f8f; margin-top: 8px;" onclick="showChatHistory()">
-                <span>📋 History</span>
-            </button>
+            <nav class="sidebar-menu" aria-label="Sidebar menu">
+                <button id="menu-documents" class="menu-item active" onclick="setSidebarPane('documents')">
+                    <span class="menu-icon">📄</span>
+                    <span class="menu-text">Documents</span>
+                </button>
+                <button id="menu-statistics" class="menu-item" onclick="setSidebarPane('statistics')">
+                    <span class="menu-icon">📊</span>
+                    <span class="menu-text">Statistics</span>
+                </button>
+            </nav>
 
-            <div class="sidebar-section">
-                <h3>Documents</h3>
-                <div id="documents-list" class="documents-list">
+            <div class="sidebar-bottom">
+                <div id="pane-documents" class="sidebar-pane">
+                    <div class="compact-docs" id="documents-list">
                     <p class="empty-state">No documents uploaded</p>
+                    </div>
+                </div>
+                <div id="pane-statistics" class="sidebar-pane hidden">
+                    <div id="stats" class="stats-box compact-stats" aria-hidden="true">
+                        <p class="stat"><strong>Documents:</strong> <span id="doc-count">0</span></p>
+                        <p class="stat"><strong>Indexed Files:</strong> <span id="indexed-file-count">0</span></p>
+                        <p class="stat"><strong>Chunks:</strong> <span id="chunk-count">0</span></p>
+                        <p class="stat"><strong>Model:</strong> <span id="model-name">llama2</span></p>
+                    </div>
                 </div>
             </div>
-
-            <div class="sidebar-section">
-                <h3>Statistics</h3>
-                <div id="stats" class="stats-box">
-                    <p class="stat"><strong>Documents:</strong> <span id="doc-count">0</span></p>
-                    <p class="stat"><strong>Indexed Files:</strong> <span id="indexed-file-count">0</span></p>
-                    <p class="stat"><strong>Chunks:</strong> <span id="chunk-count">0</span></p>
-                    <p class="stat"><strong>Model:</strong> <span id="model-name">llama2</span></p>
-                </div>
-            </div>
-
-        </div>
+        </aside>
 
         <!-- Main Chat Area -->
         <div class="main-content">

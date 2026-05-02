@@ -323,16 +323,20 @@ class OllamaLLM:
         }
 
         casual = {"yaar", "buddy", "mate", "bruh", "dude"}
+        acknowledgments = {"yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool", "no", "nah", "nope"}
 
         if not tokens:
             return False
 
-        # If all tokens are greetings or casual words, treat as greeting
-        if all(t in greetings or t in casual for t in tokens):
+        # If all tokens are greetings, acknowledgments, or casual words, treat as a conversational prompt.
+        if all(t in greetings or t in casual or t in acknowledgments for t in tokens):
             return True
 
         # Short messages where the first token is a greeting are also greetings
         if len(tokens) <= 3 and tokens[0] in greetings:
+            return True
+
+        if len(tokens) <= 3 and tokens[0] in acknowledgments:
             return True
 
         return False
@@ -343,6 +347,8 @@ class OllamaLLM:
             return "You’re welcome — glad to help! Anything else you want to ask?"
         if any(t in lower for t in ("bye", "goodbye", "farewell", "see you", "see ya")):
             return "Goodbye! Come back anytime if you need more help."
+        if any(t in lower for t in ("yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool")):
+            return "Got it. What would you like to do next?"
         if "morning" in lower:
             return "Good morning! What can I help you with today?"
         if "afternoon" in lower:
@@ -418,6 +424,10 @@ class OllamaLLM:
             "the primary purpose, common use cases",
             "a short real-world example illustrating",
             "typical scenarios or problems where",
+            "here’s a clear general explanation",
+            "here is a clear general explanation",
+            "definition: the core meaning or idea",
+            "how it works: the main mechanism or concept",
         ]
         if any(m in a for m in bad_markers):
             return True
@@ -526,7 +536,7 @@ class OllamaLLM:
         # Flexible check for greetings
         temp_norm = re.sub(r"([a-z])\1+", r"\1", lower)
         temp_norm = re.sub(r"[^a-z\s]", "", temp_norm).strip()
-        if temp_norm in {"hi", "hello", "hey", "helo", "hy", "hlo", "thanks", "thank you", "thx", "ty"}:
+        if temp_norm in {"hi", "hello", "hey", "helo", "hy", "hlo", "thanks", "thank you", "thx", "ty", "yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool", "no", "nah", "nope"}:
             return "Hello! How can I help you today?"
 
         if "machine learning" in lower or "deep learning" in lower:
@@ -552,6 +562,12 @@ class OllamaLLM:
 
         if "prime minister of india" in lower or re.fullmatch(r"who is (the )?(pm|prime minister) of india\??", lower):
             return "The Prime Minister of India is Narendra Modi."
+
+        if any(phrase in lower for phrase in ("your name", "who are you", "what is your name")):
+            return "I’m Smart File AI. I help with questions and uploaded documents."
+
+        if lower in {"what", "why", "how", "uhm", "uhmm", "um", "hmm", "y", "k", "ok", "okay", "yes", "no", "sure", "alright"}:
+            return "Could you rephrase that or add a little more detail? I can answer general questions, explain topics, and help with documents."
 
         if "capital of india" in lower:
             return "The capital of India is New Delhi."
@@ -599,13 +615,14 @@ class OllamaLLM:
             )
 
         # Always provide a useful general answer even without documents.
+        if len(cleaned.split()) <= 3:
+            return (
+                f"Could you rephrase '{cleaned}' with a bit more detail? I can answer general questions, explain concepts, compare ideas, and help with documents."
+            )
+
         return (
-            f"Here’s a clear general explanation of '{cleaned}'.\n\n"
-            "- Definition: the core meaning or idea.\n"
-            "- How it works: the main mechanism or concept.\n"
-            "- Example: one practical example.\n"
-            "- Takeaway: why it matters or when to use it.\n\n"
-            "If you want, I can also give a beginner-friendly version, a comparison, or a step-by-step explanation."
+            f"I can help with '{cleaned}', but I need a bit more context to answer it well. "
+            "Try adding a topic, goal, or example, and I’ll respond directly."
         )
 
     def list_available_models(self) -> list[str]:

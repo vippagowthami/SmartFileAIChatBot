@@ -5,18 +5,27 @@
 }
 
 :root {
+    /* theme tokens (kept backwards-compatible) */
     --primary-color: #10a37f;
     --secondary-color: #f7f7f8;
     --dark-bg: #ffffff;
     --dark-text: #0d0d0d;
     --light-text: #565869;
     --border-color: #d1d5db;
-    --message-user-bg: #10a37f;
+    --message-user-bg: var(--primary-color);
     --message-user-text: #ffffff;
     --message-ai-bg: #f7f7f8;
     --message-ai-text: #0d0d0d;
     --error-color: #d32f2f;
     --success-color: #388e3c;
+
+    /* system tokens required by the sidebar refactor */
+    --bg-secondary: var(--secondary-color);
+    --text-primary: var(--dark-text);
+    --text-secondary: var(--light-text);
+    --border: var(--border-color);
+    --primary: var(--primary-color);
+    --spacing: 8px;
 }
 
 body.dark-theme {
@@ -34,6 +43,31 @@ body.dark-theme {
     --success-color: #66bb6a;
 }
 
+body.dark-theme .chat-item:hover,
+body.dark-theme .menu-item:hover,
+body.dark-theme .chat-more-btn:hover {
+    background: rgba(255,255,255,0.08);
+}
+
+body.dark-theme .upload-progress {
+    background: rgba(52, 53, 65, 0.85);
+}
+
+body.dark-theme .upload-progress-ring-fill {
+    background: conic-gradient(var(--primary-color) 0deg, #5b6072 0deg);
+}
+
+body.dark-theme .upload-progress-ring-fill::before {
+    background: var(--dark-bg);
+}
+
+body.dark-theme .welcome-tips,
+body.dark-theme .stats-box,
+body.dark-theme .document-item,
+body.dark-theme .upload-label {
+    background: #3a3b49;
+}
+
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -49,16 +83,154 @@ body {
 }
 
 /* ==================== Sidebar ==================== */
-.sidebar {
+.sidebar-component {
     width: 280px;
-    background: var(--dark-bg);
-    border-right: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    padding: 16px;
-    overflow-y: auto;
-    box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.1);
+    padding: calc(var(--spacing) * 2);
+    overflow: hidden;
 }
+
+.sidebar-component .sidebar-top {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing);
+    margin-bottom: calc(var(--spacing) * 1.5);
+}
+
+.brand-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.brand-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.btn-new-chat {
+    width: 100%;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 180ms ease, transform 120ms ease;
+}
+
+.btn-new-chat:hover { background: color-mix(in srgb, var(--primary) 85%, black 15%); transform: translateY(-1px); }
+
+/* Recent chats */
+.recent-chats-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.chat-list { overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 6px; }
+.chat-list .list-empty { color: var(--text-secondary); padding: 8px; font-size: 13px; }
+
+.chat-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+    overflow: visible;
+}
+
+.chat-main {
+    min-width: 0;
+    flex: 1;
+}
+
+.chat-item .chat-title { font-weight: 600; color: var(--text-primary); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-item .chat-preview { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.chat-item:hover { background: rgba(0,0,0,0.04); }
+.chat-item.inactive { background: transparent; color: var(--text-secondary); }
+.chat-item.active { background: var(--primary); color: #fff; }
+.chat-item.inactive .chat-title { color: var(--text-primary); }
+.chat-item.active .chat-title { color: #fff; }
+.chat-item.active .chat-preview { color: rgba(255,255,255,0.9); }
+
+.chat-actions {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.chat-more-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.chat-more-btn:hover {
+    background: rgba(0,0,0,0.08);
+    color: var(--text-primary);
+}
+
+.chat-item.active .chat-more-btn {
+    color: #ffffff;
+}
+
+.chat-menu {
+    position: absolute;
+    top: 24px;
+    right: 0;
+    min-width: 140px;
+    background: var(--dark-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    padding: 4px;
+    display: none;
+    z-index: 20;
+}
+
+.chat-menu.open {
+    display: block;
+}
+
+.chat-menu-item {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.chat-menu-item:hover {
+    background: var(--bg-secondary);
+}
+
+/* Menu */
+.sidebar-menu { display: flex; gap: calc(var(--spacing) * 1); padding-top: calc(var(--spacing) * 1); padding-bottom: calc(var(--spacing) * 1); border-top: 1px solid var(--border); }
+.menu-item { display:flex; align-items:center; gap:8px; background: transparent; border: none; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text-primary); font-weight:600; transition: background 120ms ease; }
+.menu-item:hover { background: rgba(0,0,0,0.04); }
+.menu-item.active { background: var(--primary); color: #ffffff; }
+.menu-icon { font-size: 16px; }
+
+.sidebar-bottom { padding-top: calc(var(--spacing) * 1); border-top: 1px dashed var(--border); margin-top: auto; }
+.sidebar-pane.hidden { display: none; }
+.compact-docs { padding: 8px; }
+.compact-stats { padding: 8px; font-size: 12px; color: var(--text-secondary); }
 
 .sidebar-header {
     margin-bottom: 16px;
