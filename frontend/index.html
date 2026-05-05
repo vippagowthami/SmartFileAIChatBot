@@ -62,7 +62,14 @@
                     <h2>Chat Assistant</h2>
                     <p id="status-indicator" class="status">Connecting...</p>
                 </div>
-                <button class="settings-btn" onclick="toggleSettings()">⚙️</button>
+                <div class="header-actions">
+
+                    <label class="inline-toggle" title="Auto-play voice responses">
+                        <input type="checkbox" id="autoplay-toggle" onchange="toggleAutoPlay(this.checked)">
+                        <span>Auto-play</span>
+                    </label>
+                    <button class="settings-btn" onclick="toggleSettings()">⚙️</button>
+                </div>
             </div>
 
             <!-- Chat Container -->
@@ -119,15 +126,23 @@
                             placeholder="Ask me anything..."
                             onkeydown="handleKeyPress(event)"
                         >
+                        <button id="voice-btn" class="voice-btn state-idle" onclick="onVoiceButtonClick()" title="Voice input">
+                            <span id="voice-icon">🎤</span>
+                        </button>
                         <button class="send-btn" onclick="sendMessage()">
                             <span id="send-icon">➤</span>
                         </button>
+                    </div>
+                    <div id="voice-visualizer" class="voice-visualizer hidden" aria-hidden="true">
+                        <canvas id="voice-waveform" width="600" height="64"></canvas>
+                        <div id="voice-state-text" class="voice-state-text">Listening...</div>
                     </div>
                     <div class="input-options">
                         <label class="rag-toggle">
                             <input type="checkbox" id="use-rag" checked>
                             <span>Use RAG (retrieve context)</span>
                         </label>
+                        <span id="wake-indicator" class="wake-indicator hidden">Listening...</span>
                     </div>
                 </div>
             </div>
@@ -168,6 +183,43 @@
                         <label>AI Creativity (Temperature):</label>
                         <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.1" oninput="document.getElementById('temp-value').innerText = this.value">
                         <span id="temp-value" style="font-size:12px;color:var(--light-text);float:right">0.1</span>
+                    </div>
+                    <div class="settings-group settings-divider">
+                        <label>Enable Voice Mode:</label>
+                        <select id="voice-enabled">
+                            <option value="on">ON</option>
+                            <option value="off">OFF</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>Enable Wake Word:</label>
+                        <select id="wake-enabled">
+                            <option value="off">OFF</option>
+                            <option value="on">ON</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>Wake Word Text:</label>
+                        <input type="text" id="wake-text" value="Hey Smart">
+                    </div>
+                    <div class="settings-group">
+                        <label>STT Engine:</label>
+                        <select id="stt-model" disabled>
+                            <option value="browser">Browser Native (Fast)</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>TTS Engine:</label>
+                        <select id="tts-engine" disabled>
+                            <option value="browser">Browser Native (Fast)</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>Auto-play Responses:</label>
+                        <select id="voice-autoplay">
+                            <option value="on">ON</option>
+                            <option value="off">OFF</option>
+                        </select>
                     </div>
                     <div class="settings-group" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color);">
                         <button class="clear-db-btn" style="width:100%" onclick="clearDatabase(); toggleSettings();">

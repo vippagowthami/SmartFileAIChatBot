@@ -93,7 +93,7 @@ def detect_intent(query: str) -> str:
         return "list"
     if any(k in q for k in ["how does", "how do", "why does", "why do", "architecture", "internals", "deep dive", "under the hood", "implement"]):
         return "deep_dive"
-    if any(k in q for k in ["explain", "why", "how", "describe", "overview"]):
+    if any(k in q for k in ["explain", "why", "how", "describe", "overview", "summarize", "summary"]):
         return "explanation"
     return "other"
 

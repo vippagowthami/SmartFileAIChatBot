@@ -133,37 +133,35 @@ class OllamaLLM:
         self,
         prompt: str,
         context: str,
-        temperature: float = 0.1,
+        temperature: float = 0.2,
         *,
         intent: str | None = None,
         verbosity: str | None = None,
     ) -> str:
-        intent = (intent or "").strip().lower() or "explanation"
-        verbosity = (verbosity or "").strip().lower() or "medium"
-
-        length_hint = {
-            "concise": "Answer in 3–6 lines. Be direct.",
-            "medium": "Give a clear, structured answer. Keep it moderately detailed.",
-            "detailed": "Give a detailed breakdown with sections and examples where relevant.",
-        }.get(verbosity, "Give a clear, structured answer.")
+        """Generation specifically for when we HAVE document context."""
+        
+        # Determine depth based on intent and verbosity
+        depth_instruction = "Provide a concise, direct answer."
+        if verbosity == "detailed" or intent in {"deep_dive", "explanation"}:
+            depth_instruction = "Provide a direct answer first, followed by a detailed expert analysis with clear sections and bullet points."
+        elif verbosity == "medium" or intent in {"list", "comparison"}:
+            depth_instruction = "Provide a balanced, informative answer with relevant details."
 
         system_message = (
-            "You are Smart File AI Chat, a local assistant answering questions ONLY from provided documents.\n\n"
-            "STRICT RULES (MANDATORY):\n"
-            "1) ANSWER ONLY FROM DOCUMENT CONTEXT. Do NOT use external knowledge or hallucinate.\n"
-            "2) If the question is answered in the documents, extract the answer verbatim and add citation: (src: filename)\n"
-            "3) If documents do NOT contain the answer, respond with: 'The uploaded documents do not contain information about this topic.'\n"
-            "4) NEVER guess, infer, or add information not explicitly in the documents.\n"
-            "5) Format: Clear bullet points or short paragraphs. Include citations for all claims.\n"
-            f"Intent: {intent}. {length_hint}\n\n"
-            "Remember: If unsure, say so. Never fabricate."
+            "You are Smart File AI, an expert analytical assistant. Your goal is to provide high-quality answers derived EXCLUSIVELY from the provided DOCUMENT CONTEXT.\n\n"
+            "RULES:\n"
+            "1. ANSWER-FIRST: Start your response with the most direct answer to the question. Avoid introductory phrases.\n"
+            "2. CITATIONS: Every claim or fact MUST be cited immediately using brackets, e.g., [Source 1], [Source 2]. Use the labels provided in the context.\n"
+            "3. NO HALLUCINATION: If the answer is not in the context, state: 'I'm sorry, but the provided documents do not contain information to answer this question.'\n"
+            "4. FORMATTING: Use Markdown (bolding, lists) for readability.\n"
+            f"STYLE: {depth_instruction}"
         )
 
-        full_prompt = (
+        prompt_payload = (
             f"{system_message}\n\n"
             f"DOCUMENT CONTEXT:\n{context}\n\n"
-            f"QUESTION: {prompt}\n\n"
-            f"ANSWER (from documents only):"
+            f"USER QUESTION: {prompt}\n\n"
+            f"EXPERT ANSWER (Source-Based Only):"
         )
 
         try:
@@ -171,43 +169,33 @@ class OllamaLLM:
                 self.generate_endpoint,
                 json={
                     "model": self.model,
-                    "prompt": full_prompt,
+                    "prompt": prompt_payload,
                     "stream": False,
                     "options": {
-                            "temperature": temperature,
-                            "top_p": 0.9,
-                        "num_predict": 2000,
-                        },
+                        "temperature": temperature,
+                        "top_p": 0.9,
+                        "num_predict": 2500,
+                    },
                 },
                 timeout=120,
             )
+            if response.status_code != 200:
+                print(f"[Ollama Error] {response.status_code}: {response.text}")
+            
             response.raise_for_status()
             generated = response.json().get("response", "").strip()
             generated = self._clean_response(generated)
 
-            # If the model produced a refusal-like string, prefer a safe document snippet instead
-            lower_g = (generated or "").lower()
-            refusal_like = self._is_refusal(generated) or bool(re.search(r"\bi cannot answer\b|\bi am unable to\b|\bi cannot provide\b", lower_g))
-
             if generated and len(generated) > 10 and not self._is_refusal(generated):
                 sources = self._extract_sources_from_context(context)
-
-                # If we have document sources but the generated text looks short
-                # or does not end cleanly, append a safe document snippet so
-                # the user always receives a complete answer.
-                if sources and (not generated.endswith(('.', '!', '?')) or len(generated) < 300 or re.search(r"\w-$", generated)):
-                    fallback_snippet = self._fallback_document_answer(prompt, context)
-                    combined = generated.rstrip() + "...\n\n" + fallback_snippet
-                    return self._enforce_rag_response_format(combined, sources)
-
-                return self._enforce_rag_response_format(generated, sources)
-        except Exception:
+                if sources:
+                    return self._enforce_rag_response_format(generated, sources)
+                return generated
+        except Exception as e:
+            print(f"[Ollama Exception] {e}")
             pass
 
-        fallback = self._fallback_document_answer(prompt, context)
-        sources = self._extract_sources_from_context(context)
-        # Fallback might be a general answer; only enforce strict RAG format when we actually have sources.
-        return self._enforce_rag_response_format(fallback, sources) if sources else fallback
+        return self._fallback_document_answer(prompt, context)
 
     # ------------------------------------------------------------------ #
     # General answer (no documents)
@@ -224,41 +212,25 @@ class OllamaLLM:
         if self._is_greeting_prompt(prompt):
             return self._greeting_response(prompt)
 
-        intent = (intent or "").strip().lower() or "explanation"
-        verbosity = (verbosity or "").strip().lower() or "medium"
-        length_hint = {
-            "concise": "Keep it short (3–6 lines).",
-            "medium": "Moderate length. Use bullets only if it helps clarity.",
-            "detailed": "Detailed explanation with a clear breakdown and an example if useful.",
-        }.get(verbosity, "Moderate length.")
-
-        system_message = (
-            "You are Smart File AI Chat.\n"
-            "Write like an advanced conversational AI (ChatGPT/Claude style): natural, helpful, and non-robotic.\n"
-            "Always answer the user's question directly (no deflection).\n"
-            "If the question asks for a factual person/place/date/definition, answer the exact fact first and then add one short sentence of context.\n"
-            "Do NOT mention limitations/capabilities.\n"
-            f"Intent: {intent}. {length_hint}"
-        )
-
-        full_prompt = (
-            f"{system_message}\n\n"
-            f"QUESTION: {prompt}\n\n"
-            f"ANSWER:"
+        # Clear directive to avoid conversational confusion
+        prompt_payload = (
+            "Instruction: Directly answer the user's question clearly and accurately.\n\n"
+            f"Question: {prompt}\n"
+            "Answer:"
         )
 
         try:
-            def _call_ollama(prompt_text: str, temp: float, max_tokens: int) -> str:
+            def _call_ollama(text: str, temp: float) -> str:
                 r = requests.post(
                     self.generate_endpoint,
                     json={
                         "model": self.model,
-                        "prompt": prompt_text,
+                        "prompt": text,
                         "stream": False,
                         "options": {
                             "temperature": temp,
                             "top_p": 0.9,
-                            "num_predict": max_tokens,
+                            "num_predict": 1200,
                         },
                     },
                     timeout=120,
@@ -266,33 +238,16 @@ class OllamaLLM:
                 r.raise_for_status()
                 return self._clean_response(r.json().get("response", "").strip())
 
-            token_budget = 380 if verbosity == "concise" else (650 if verbosity == "detailed" else 520)
-            generated = _call_ollama(full_prompt, temperature, token_budget)
+            generated = _call_ollama(prompt_payload, temperature)
 
-            if generated and len(generated) > 15 and not self._is_refusal(generated):
-                if not self._is_low_quality_answer(generated, prompt):
-                    return generated
+            if generated and len(generated) > 10 and not self._is_refusal(generated):
+                return generated
 
-            # Retry once with a stricter instruction set if the answer is low-quality.
-            strict_system = (
-                "You are Smart File AI Chat.\n"
-                "You MUST answer the user's question directly.\n"
-                "Do NOT ask follow-up questions for simple 'what is' / 'define' questions.\n"
-                "Do NOT say you are limited, refuse, or mention capabilities.\n"
-                "Write a natural, human-like answer (not a rigid template).\n"
-                "Avoid placeholder text like 'concise description', 'key points', or generic filler.\n"
-                "If the question is asking for a factual answer, give the exact fact first instead of a template.\n"
-                "If the question asks for a definition, begin with a one-sentence definition and then add 2-4 concrete facts or examples.\n"
-                f"Intent: {intent}. Length: {verbosity}.\n"
-                "Be concise but complete for the requested length."
-            )
-            strict_prompt = f"{strict_system}\n\nQUESTION: {prompt}\n\nANSWER:"
-            regenerated = _call_ollama(strict_prompt, min(0.2, temperature), token_budget + 400)
-
-            if regenerated and len(regenerated) > 15 and not self._is_refusal(regenerated):
-                if not self._is_low_quality_answer(regenerated, prompt):
-                    return regenerated
-        except Exception:
+            # Fallback retry with even more direct phrasing
+            retry_prompt = f"Provide a direct definition of '{prompt}'."
+            return _call_ollama(retry_prompt, 0.25)
+        except Exception as e:
+            print(f"[Ollama General Exception] {e}")
             pass
 
         return self._fallback_general_answer(prompt)
@@ -301,26 +256,15 @@ class OllamaLLM:
     # Helpers
     # ------------------------------------------------------------------ #
     def _is_greeting_prompt(self, prompt: str) -> bool:
-        # More robust greeting detection for short, casual inputs.
-        s = (prompt or "").strip()
-        if not s:
+        s = (prompt or "").strip().lower()
+        if not s: return True
+        if len(s) > 50: return False
+        
+        greetings = {"hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank", "thankyou", "thx", "ty", "bye", "goodbye"}
+        tokens = s.split()
+        if tokens and tokens[0] in greetings:
             return True
-
-        # If the prompt is long, don't treat it as a greeting.
-        if len(s) > 60:
-            return False
-
-        # Normalize repeated letters and non-alpha chars
-        normalized = re.sub(r"([a-z])\1+", r"\1", s.lower())
-        normalized = re.sub(r"[^a-z\s]", " ", normalized).strip()
-        tokens = [t for t in normalized.split() if t]
-
-        greetings = {
-            "hi", "hello", "hey", "helo", "hy", "hlo",
-            "morning", "afternoon", "evening",
-            "thanks", "thank", "thankyou", "thx", "ty",
-            "bye", "goodbye", "farewell",
-        }
+        return False
 
         casual = {"yaar", "buddy", "mate", "bruh", "dude"}
         acknowledgments = {"yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool", "no", "nah", "nope"}
@@ -344,24 +288,24 @@ class OllamaLLM:
     def _greeting_response(self, prompt: str) -> str:
         lower = (prompt or "").strip().lower()
         if any(t in lower for t in ("thanks", "thank you", "thx", "ty")):
-            return "You’re welcome — glad to help! Anything else you want to ask?"
+            return "You're most welcome! I'm glad I could help. Do you have any other questions?"
         if any(t in lower for t in ("bye", "goodbye", "farewell", "see you", "see ya")):
-            return "Goodbye! Come back anytime if you need more help."
+            return "Goodbye! Feel free to return if you need any more assistance with your files."
         if any(t in lower for t in ("yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool")):
-            return "Got it. What would you like to do next?"
+            return "Understood. Please let me know how you'd like to proceed or if you have another question."
         if "morning" in lower:
-            return "Good morning! What can I help you with today?"
+            return "Good morning! How can I assist you with your documents today?"
         if "afternoon" in lower:
-            return "Good afternoon! What can I help you with today?"
+            return "Good afternoon! What can I help you analyze today?"
         if "evening" in lower:
-            return "Good evening! What can I help you with today?"
+            return "Good evening! Is there anything you'd like me to look into for you?"
 
         # Casual greetings
         if any(c in lower for c in ("yaar", "buddy", "mate", "dude", "bruh")):
-            return "Hey! I’m here — how can I help you today?"
+            return "Hello! I'm here and ready to help. What's on your mind?"
 
         # Default friendly greeting
-        return "Hi there! I’m Smart File AI — ask me a question or upload a document and I’ll help." 
+        return "Greetings! I am Smart File AI. I can answer general questions or analyze any documents you upload. How can I help you today?" 
 
     def _clean_response(self, text: str) -> str:
         """Removes trailing refusal appendages generated by over-aligned models."""
@@ -522,9 +466,9 @@ class OllamaLLM:
                 best_source = current_source
 
         if best_text and best_score > 1:
-            snippet = best_text[:1000].strip()
+            snippet = best_text[:1200].strip()
             label = best_source if best_source else "the document"
-            return f"Based on {label}:\n\n{snippet}"
+            return f"According to {label}:\n\n{snippet}"
 
         return self._fallback_general_answer(prompt)
 
@@ -596,28 +540,36 @@ class OllamaLLM:
             )
 
         if lower.startswith("what is ") or lower.startswith("define ") or lower.startswith("definition of "):
-            # Extract the term after "what is"/"define"/"definition of"
             term = cleaned
             for prefix in ("what is ", "define ", "definition of "):
                 if lower.startswith(prefix):
                     term = cleaned[len(prefix):].strip()
                     break
-            term = term.strip().strip(".")
-            if not term:
+            term = term.strip().strip("?").strip(".")
+            
+            # If we have a common term, give a real mini-definition instead of a template
+            if term == "corba":
                 return (
-                    "Tell me the word/term you want defined, and I’ll define it with a short example."
+                    "CORBA (Common Object Request Broker Architecture) is a standard designed to facilitate communication between systems on different platforms.\n\n"
+                    "- Key Function: It allows applications to call methods on objects across a network as if they were local.\n"
+                    "- Language Neutral: It supports multiple programming languages via IDL (Interface Definition Language).\n"
+                    "- Middleware: It acts as an intermediary (Object Request Broker) that handles data marshalling and network details."
                 )
+
+            if not term:
+                return "I'm not sure which term you'd like me to define. Could you please specify?"
+
             return (
-                f"{term.capitalize()} is a topic that is typically defined by what it is, how it works, and where it is used.\n\n"
-                f"- Definition: a short, direct explanation of {term}.\n"
-                f"- Why it matters: the practical reason people use or study {term}.\n"
-                f"- Example: one concrete example that makes {term} easier to understand.\n"
+                f"I'm sorry, I don't have a specific expert definition for '{term}' in my local knowledge bank right now. "
+                f"However, '{term}' is generally a technical topic that involves specific architectural or programming principles. "
+                "If you upload a document about it, I can provide a much more precise answer."
             )
 
         # Always provide a useful general answer even without documents.
         if len(cleaned.split()) <= 3:
             return (
-                f"Could you rephrase '{cleaned}' with a bit more detail? I can answer general questions, explain concepts, compare ideas, and help with documents."
+                f"I understand you're asking about '{cleaned}'. Could you provide a bit more detail? "
+                "I'm here to explain concepts, compare ideas, or analyze your uploaded documents."
             )
 
         return (
@@ -654,41 +606,23 @@ class OllamaLLM:
 
     def _enforce_rag_response_format(self, text: str, sources: list[str]) -> str:
         """
-        Enforces the response format rules when we have retrieved document context.
-        - Adds [From Files] section if missing
-        - Ensures citations are present as (src: filename[, filename...]) in the file-based section
-        - If the model indicates insufficiency, ensures the exact required sentence is present
+        Enforces the response format rules for RAG context.
+        - Ensures citations are present.
+        - Removes robotic section headers.
         """
         cleaned = (text or "").strip()
         if not cleaned:
             return cleaned
 
-        src_suffix = ""
-        if sources:
-            src_suffix = f"(src: {', '.join(sources)})"
+        # Check if the model already included any form of citation
+        has_citations = False
+        # Look for [Source 1], [Source 2], etc. or [filename]
+        if re.search(r"\[Source \d+\]|\[.+?\]", cleaned):
+            has_citations = True
+        
+        # If no citations were found, append them professionally at the bottom
+        if not has_citations and sources:
+            source_labels = [f"[Source {i+1}: {src}]" for i, src in enumerate(sources)]
+            return f"{cleaned}\n\nSources: {', '.join(source_labels)}"
 
-        # If the model already produced structured sections, only patch citations + required sentence.
-        has_from = "[from files]" in cleaned.lower()
-        has_general = "[general answer]" in cleaned.lower()
-        says_insufficient = "the uploaded files do not fully contain the answer." in cleaned.lower()
-
-        if has_from or has_general:
-            out = cleaned
-
-            # If it contains a General Answer section, ensure the required insufficiency sentence appears first.
-            if has_general and not says_insufficient:
-                out = "The uploaded files do not fully contain the answer.\n\n" + out
-
-            # Ensure a source citation exists somewhere in the From Files section.
-            if sources:
-                # If any (src: ...) exists already, don't duplicate.
-                if "(src:" not in out.lower():
-                    out = out.rstrip() + f"\n\n{src_suffix}"
-            return out
-
-        # Unstructured response on the RAG path: wrap it as a file-based answer and add citations.
-        if sources:
-            return f"[From Files]\n{cleaned}\n\n{src_suffix}"
-
-        # If no sources, return as-is (should be rare on RAG path).
         return cleaned

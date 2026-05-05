@@ -399,6 +399,24 @@ body {
     background: var(--secondary-color);
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.inline-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--light-text);
+}
+
+.inline-toggle input[type="checkbox"] {
+    accent-color: var(--primary-color);
+}
+
 /* ==================== Chat Container ==================== */
 .chat-container {
     flex: 1;
@@ -738,6 +756,211 @@ body {
 .send-btn:disabled {
     background: var(--border-color);
     cursor: not-allowed;
+}
+
+.voice-btn {
+    border: 1px solid var(--border-color);
+    background: var(--secondary-color);
+    color: var(--dark-text);
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    transition: all 180ms ease;
+}
+
+.voice-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.voice-btn.state-listening {
+    background: #fff1f1;
+    border-color: #d32f2f;
+    color: #d32f2f;
+    animation: pulseMic 1s infinite;
+}
+
+.voice-btn.state-processing {
+    color: #0d8e6e;
+}
+
+.voice-btn.state-speaking {
+    background: rgba(16, 163, 127, 0.14);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+@keyframes pulseMic {
+    0% {
+        box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.35);
+    }
+    70% {
+        box-shadow: 0 0 0 12px rgba(211, 47, 47, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(211, 47, 47, 0);
+    }
+}
+
+.voice-visualizer {
+    margin-top: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: rgba(16, 163, 127, 0.06);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.voice-visualizer.hidden {
+    display: none;
+}
+
+#voice-waveform {
+    width: 100%;
+    height: 48px;
+}
+
+.voice-state-text {
+    font-size: 12px;
+    color: var(--light-text);
+    white-space: nowrap;
+}
+
+.wake-indicator {
+    font-size: 12px;
+    color: #0d8e6e;
+}
+
+.wake-indicator.hidden {
+    display: none;
+}
+
+.speaking-waves {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 12px;
+}
+
+.speaking-waves span {
+    width: 2px;
+    border-radius: 2px;
+    background: currentColor;
+    animation: waveBar 0.9s infinite ease-in-out;
+}
+
+.speaking-waves span:nth-child(1) { height: 4px; animation-delay: 0s; }
+.speaking-waves span:nth-child(2) { height: 10px; animation-delay: 0.12s; }
+.speaking-waves span:nth-child(3) { height: 6px; animation-delay: 0.24s; }
+
+@keyframes waveBar {
+    0%, 100% { transform: scaleY(0.55); opacity: 0.6; }
+    50% { transform: scaleY(1); opacity: 1; }
+}
+
+.message-actions {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.tts-ctrl-btn {
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--light-text);
+    font-size: 12px;
+    border-radius: 999px;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: all 180ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.tts-ctrl-btn.hidden {
+    display: none;
+}
+
+/* Speak button */
+.tts-speak-btn:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: rgba(16, 163, 127, 0.08);
+}
+
+/* Pause button */
+.tts-pause-btn {
+    border-color: #f59e0b;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.06);
+}
+.tts-pause-btn:hover {
+    background: rgba(245, 158, 11, 0.15);
+}
+
+/* Resume button */
+.tts-resume-btn {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: rgba(16, 163, 127, 0.06);
+    animation: ttsPulse 1.5s infinite;
+}
+.tts-resume-btn:hover {
+    background: rgba(16, 163, 127, 0.15);
+}
+
+/* Stop button */
+.tts-stop-btn {
+    border-color: #ef4444;
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.06);
+}
+.tts-stop-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+}
+
+@keyframes ttsPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0.3); }
+    50% { box-shadow: 0 0 0 4px rgba(16, 163, 127, 0); }
+}
+
+/* Keep old class for backward compat */
+.speaker-btn {
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--light-text);
+    font-size: 12px;
+    border-radius: 999px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.speaker-btn:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.speaker-btn.is-active {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+    background: rgba(16, 163, 127, 0.08);
+}
+
+.settings-divider {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
 }
 
 .input-options {

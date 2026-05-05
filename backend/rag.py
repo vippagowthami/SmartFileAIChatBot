@@ -157,7 +157,9 @@ class RAGPipeline:
         mentioned_files = []
         lower_question = question.lower()
         for filename in indexed_files:
-            if filename.lower() in lower_question:
+            # Match filename or basename
+            basename = filename.lower()
+            if basename in lower_question or os.path.splitext(basename)[0] in lower_question:
                 mentioned_files.append(filename)
         
         if mentioned_files:
@@ -166,9 +168,14 @@ class RAGPipeline:
             else:
                 where_filter = {"$or": [{"source_name": f} for f in mentioned_files]}
 
+        # If files are mentioned, we can be slightly more lenient with threshold
+        current_threshold = self.relevance_threshold
+        if mentioned_files:
+            current_threshold = max(0.3, self.relevance_threshold - 0.15)
+
         search_result = self.db.search(
             query_embedding=query_embedding, 
-            num_results=self.num_retrieval,
+            num_results=self.num_retrieval + 2, # Fetch more, filter later
             where=where_filter
         )
         
@@ -177,25 +184,27 @@ class RAGPipeline:
         if mentioned_files and not search_result["results"]:
             search_result = self.db.search(
                 query_embedding=query_embedding, 
-                num_results=self.num_retrieval
+                num_results=self.num_retrieval + 2
             )
 
         retrieval_time = search_result["retrieval_time"]
         retrieved_docs = search_result["results"]
 
-        # Filter out low-similarity chunks to avoid mixing unrelated documents
-        # Similarity is (1 - distance) because Chroma returns cosine distance for our config.
+        # Filter out low-similarity chunks
         filtered_docs = []
         for d in retrieved_docs:
             try:
+                # Chroma cosine distance is (1 - cosine_similarity)
                 sim = 1.0 - float(d.get("distance", 1.0))
             except Exception:
                 sim = 0.0
-            if sim >= self.relevance_threshold:
+            if sim >= current_threshold:
                 filtered_docs.append(d)
-        retrieved_docs = filtered_docs
+        
+        # Keep only top-k after filtering
+        retrieved_docs = filtered_docs[:self.num_retrieval]
 
-        # Compute top-1 cosine similarity
+        # Compute top-1 cosine similarity for decision making
         top_similarity = 0.0
         if retrieved_docs:
             try:
@@ -203,8 +212,10 @@ class RAGPipeline:
             except Exception:
                 top_similarity = 0.0
 
-        # For broad knowledge questions, require a stronger match before using documents.
-        if not self._should_use_document_context(question, intent, mentioned_files, top_similarity):
+        # Decision logic: Should we use the retrieved context?
+        use_rag = self._should_use_document_context(question, intent, mentioned_files, top_similarity)
+        
+        if not use_rag:
             answer, generation_time = self.llm.generate(
                 prompt=question, context="", temperature=temperature, intent=intent, verbosity=verbosity
             )
@@ -226,7 +237,7 @@ class RAGPipeline:
         # Merge adjacent chunks to avoid fragmentation
         merged_docs = self._merge_adjacent_chunks(retrieved_docs)
 
-        # Build rich context with source labels and merged chunks
+        # Build rich context with source labels
         context_parts = []
         for i, doc in enumerate(merged_docs, 1):
             src = (
@@ -244,7 +255,7 @@ class RAGPipeline:
                     doc["metadata"].get("source_name")
                     or os.path.basename(doc["metadata"].get("source", "Unknown"))
                 ),
-                "snippet": self._clean_text(doc["text"][:350]).strip(),
+                "snippet": self._clean_text(doc["text"][:350]).strip() + "...",
                 "similarity": round(1.0 - float(doc.get("distance", 1.0)), 4),
             }
             for doc in merged_docs
@@ -306,64 +317,37 @@ class RAGPipeline:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
-    def _merge_adjacent_chunks(self, retrieved_docs: list, merge_threshold: int = 1500) -> list:
+    def _merge_adjacent_chunks(self, retrieved_docs: list, merge_threshold: int = 2500) -> list:
         """
         Merge adjacent chunks from the same source to avoid fragmentation.
-        
-        If consecutive chunks are from the same file and their combined size is < threshold,
-        merge them to preserve context.
-        
-        Args:
-            retrieved_docs: List of retrieved documents
-            merge_threshold: Max chars before stopping merges (default 1500 ≈ 375 tokens)
-        
-        Returns:
-            Potentially merged list of documents
         """
         if len(retrieved_docs) <= 1:
             return retrieved_docs
 
         merged = []
-        current_batch = [retrieved_docs[0]]
-        current_size = len(retrieved_docs[0]["text"])
-
-        for doc in retrieved_docs[1:]:
-            same_file = (
-                doc["metadata"].get("source_name")
-                == current_batch[0]["metadata"].get("source_name")
-            )
-            combined_size = current_size + len(doc["text"])
-
-            if same_file and combined_size < merge_threshold and len(current_batch) < 3:
-                # Add to current batch
-                current_batch.append(doc)
-                current_size = combined_size
+        # Group by source_name and then merge adjacent indices if possible
+        # For simplicity, we'll merge all retrieved chunks from the same file into one context block
+        source_groups = {}
+        for doc in retrieved_docs:
+            src = doc["metadata"].get("source_name", "Unknown")
+            if src not in source_groups:
+                source_groups[src] = []
+            source_groups[src].append(doc)
+        
+        for src, docs in source_groups.items():
+            if len(docs) == 1:
+                merged.append(docs[0])
             else:
-                # Save batch and start new one
-                if current_batch:
-                    merged.append(self._merge_batch(current_batch))
-                current_batch = [doc]
-                current_size = len(doc["text"])
-
-        # Add final batch
-        if current_batch:
-            merged.append(self._merge_batch(current_batch))
+                combined_text = "\n\n[...]\n\n".join(d["text"] for d in docs)
+                # Keep the best distance
+                best_dist = min(float(d.get("distance", 1.0)) for d in docs)
+                merged.append({
+                    "text": combined_text,
+                    "metadata": docs[0]["metadata"],
+                    "distance": best_dist
+                })
 
         return merged
-
-    def _merge_batch(self, batch: list) -> dict:
-        """Merge a batch of documents from the same source."""
-        if len(batch) == 1:
-            return batch[0]
-
-        # Combined text with clear separation
-        merged_text = "\n\n".join(doc["text"] for doc in batch)
-        
-        return {
-            "text": merged_text,
-            "metadata": batch[0]["metadata"],
-            "distance": min(float(doc.get("distance", 1.0)) for doc in batch),
-        }
 
     def _has_document_cues(self, question: str) -> bool:
         """Detect whether the user is explicitly asking about uploaded files/documents."""
@@ -396,14 +380,18 @@ class RAGPipeline:
         top_similarity: float,
     ) -> bool:
         """Decide whether retrieved chunks are strong enough to answer from files."""
+        # If the user explicitly mentions a file, we should almost always use RAG
         if mentioned_files:
-            return True
+            return top_similarity >= 0.25
 
-        if not self._has_document_cues(question):
-            if (intent or "").strip().lower() in {"definition", "explanation", "comparison", "list", "deep_dive"}:
-                return top_similarity >= 0.68
-            return top_similarity >= 0.60
+        # If user asks about "this document" or "uploaded file"
+        if self._has_document_cues(question):
+            return top_similarity >= 0.35
 
+        # For general queries, be slightly stricter but still allow relevant document matches
+        if (intent or "").strip().lower() in {"definition", "explanation", "comparison"}:
+            return top_similarity >= 0.40
+        
         return top_similarity >= self.relevance_threshold
 
     def _should_use_general_llm(self, question: str) -> bool:
@@ -413,9 +401,9 @@ class RAGPipeline:
             return True
 
         greeting_patterns = {
-            "hi", "hello", "hey", "helo",
+            "hi", "hello", "hey", "helo", "hy", "hlo",
             "good morning", "good afternoon", "good evening",
-            "thanks", "thank you",
+            "thanks", "thank you", "thx", "ty",
             "bye", "goodbye",
         }
         return normalized in greeting_patterns

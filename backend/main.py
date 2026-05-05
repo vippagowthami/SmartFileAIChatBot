@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 import os
 import tempfile
@@ -20,6 +22,9 @@ if __package__ in (None, ""):
     from backend.logger import ConversationLogger
     from backend.persistence import JsonPersistence
     from backend.query_understanding import understand_query
+    from backend.stt_service import STTService
+    from backend.tts_service import TTSService
+    from backend.wake_word import WakeWordService
 else:
     from .llm import OllamaLLM
     from .db import VectorDatabase
@@ -27,6 +32,9 @@ else:
     from .logger import ConversationLogger
     from .persistence import JsonPersistence
     from .query_understanding import understand_query
+    from .stt_service import STTService
+    from .tts_service import TTSService
+    from .wake_word import WakeWordService
 
 
 # ------------------------------------------------------------------ #
@@ -35,7 +43,7 @@ else:
 llm = OllamaLLM(model="functiongemma", embedding_model="all-minilm")
 
 # Auto-detect the best available Ollama model
-_PREFERRED_MODELS = ["llama3", "llama3.2", "llama3.1", "mistral", "gemma", "gemma2", "phi3", "phi", "functiongemma"]
+_PREFERRED_MODELS = ["llama3.2", "llama3", "llama3.1", "mistral", "gemma", "gemma2", "phi3", "phi", "functiongemma"]
 _available_models = llm.list_available_models()
 if _available_models:
     _chosen = None
@@ -63,6 +71,27 @@ conversation_logger = ConversationLogger(log_dir="./logs")
 indexed_files_store = JsonPersistence("./data/indexed_files.json", {"files": []})
 chat_history_store = JsonPersistence("./data/chat_history.json", {"messages": []})
 conversation_memory = {}  # Per-session memory: {session_id: [last_messages]}
+
+# Voice layer (kept isolated from core chat pipeline)
+stt_service = STTService(model_size="base")
+tts_service = TTSService(engine="piper")
+wake_word_service = WakeWordService(wake_word_text="Hey Smart")
+
+
+def _iter_file_chunks(path: str, chunk_size: int = 64 * 1024):
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+
+def _cleanup_temp_file(path: str):
+    try:
+        os.unlink(path)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------ #
@@ -136,6 +165,18 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Startup tasks for the backend."""
+    print("[startup] Starting Wake Word Service...")
+    try:
+        # Start the wake word service automatically on startup
+        wake_word_service.start()
+        print(f"[startup] Wake Word Service started: {wake_word_service.status()}")
+    except Exception as e:
+        print(f"[startup] Failed to start Wake Word Service: {e}")
+
+
 # ------------------------------------------------------------------ #
 # Pydantic models
 # ------------------------------------------------------------------ #
@@ -161,6 +202,20 @@ class QueryResponse(BaseModel):
     verbosity: str | None = None
 
 
+class VoiceSettingsPayload(BaseModel):
+    enable_voice_mode: bool = True
+    enable_wake_word: bool = False
+    wake_word_text: str = "Hey Smart"
+    stt_model: str = "base"
+    tts_engine: str = "piper"
+    auto_play_responses: bool = True
+
+
+class TTSPayload(BaseModel):
+    text: str
+    tts_engine: str = "piper"
+
+
 # ------------------------------------------------------------------ #
 # Routes
 # ------------------------------------------------------------------ #
@@ -184,7 +239,105 @@ async def health_check():
         "status": "healthy" if ollama_available else "degraded",
         "ollama": {"available": ollama_available, "model": llm.model},
         "database": db_stats,
+        "voice": {
+            "stt_model": stt_service.model_size,
+            "tts_engine": tts_service.engine,
+            "wake_word": wake_word_service.status(),
+        },
     }
+
+
+@app.get("/voice/settings")
+async def get_voice_settings():
+    return {
+        "enable_voice_mode": True,
+        "enable_wake_word": wake_word_service.enabled,
+        "wake_word_text": wake_word_service.wake_word_text,
+        "stt_model": stt_service.model_size,
+        "tts_engine": tts_service.engine,
+        "auto_play_responses": True,
+        "wake_word_status": wake_word_service.status(),
+    }
+
+
+@app.post("/voice/settings")
+async def set_voice_settings(payload: VoiceSettingsPayload):
+    try:
+        stt_service.set_model(payload.stt_model)
+        tts_service.set_engine(payload.tts_engine)
+        wake_status = wake_word_service.configure(
+            enabled=payload.enable_wake_word and payload.enable_voice_mode,
+            wake_word_text=payload.wake_word_text,
+        )
+        return {
+            "success": True,
+            "stt_model": stt_service.model_size,
+            "tts_engine": tts_service.engine,
+            "wake_word_status": wake_status,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/wake-word/events")
+async def poll_wake_word_events(after_id: int = 0):
+    return {"events": wake_word_service.poll(after_id=after_id)}
+
+
+@app.post("/transcribe")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    stt_model: str = "base",
+    language: str | None = None,
+):
+    try:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No audio file provided")
+
+        ext = Path(file.filename).suffix.lower() or ".webm"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            stt_service.set_model(stt_model)
+            result = await run_in_threadpool(stt_service.transcribe, tmp_path, language)
+        finally:
+            _cleanup_temp_file(tmp_path)
+
+        return {
+            "text": result.text,
+            "language": result.language,
+            "duration_sec": result.duration_sec,
+            "model": stt_service.model_size,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tts")
+async def synthesize_tts(payload: TTSPayload):
+    try:
+        if not payload.text or not payload.text.strip():
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+        tts_service.set_engine(payload.tts_engine)
+        audio_path = await run_in_threadpool(tts_service.synthesize, payload.text)
+
+        media_type = "audio/wav"
+        return StreamingResponse(
+            _iter_file_chunks(audio_path),
+            media_type=media_type,
+            background=BackgroundTask(_cleanup_temp_file, audio_path),
+            headers={"X-TTS-Engine": tts_service.engine},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/upload")
