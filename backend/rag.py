@@ -2,6 +2,7 @@ import time
 import uuid
 import os
 import re
+from functools import lru_cache
 try:
     from .file_processor import FileProcessor
     from .db import VectorDatabase
@@ -44,6 +45,44 @@ class RAGPipeline:
         self.num_retrieval = num_retrieval
         # Strict threshold for local models (they hallucinate if given too much noise)
         self.relevance_threshold = relevance_threshold
+        # Add caching for embeddings
+        self._embedding_cache = {}
+        self._query_cache = {}
+        self._max_cache_size = 1000
+
+    def _get_cache_key(self, text: str) -> str:
+        """Generate cache key for text"""
+        return f"{hash(text)}_{len(text)}"
+
+    def _manage_cache_size(self, cache_dict: dict):
+        """Manage cache size to prevent memory issues"""
+        if len(cache_dict) > self._max_cache_size:
+            # Remove oldest 20% of entries
+            keys_to_remove = list(cache_dict.keys())[:int(self._max_cache_size * 0.2)]
+            for key in keys_to_remove:
+                del cache_dict[key]
+
+    def _get_cached_embedding(self, text: str) -> list[float] | None:
+        """Get embedding from cache"""
+        cache_key = self._get_cache_key(text)
+        return self._embedding_cache.get(cache_key)
+
+    def _cache_embedding(self, text: str, embedding: list[float]):
+        """Cache embedding for future use"""
+        cache_key = self._get_cache_key(text)
+        self._manage_cache_size(self._embedding_cache)
+        self._embedding_cache[cache_key] = embedding
+
+    def _get_cached_query(self, question: str, context_hash: str) -> dict | None:
+        """Get cached query result"""
+        cache_key = f"{hash(question)}_{context_hash}"
+        return self._query_cache.get(cache_key)
+
+    def _cache_query(self, question: str, context_hash: str, result: dict):
+        """Cache query result"""
+        cache_key = f"{hash(question)}_{context_hash}"
+        self._manage_cache_size(self._query_cache)
+        self._query_cache[cache_key] = result
 
     # ------------------------------------------------------------------ #
     # Ingestion
@@ -107,13 +146,29 @@ class RAGPipeline:
         intent: str | None = None,
         verbosity: str | None = None,
         original_question: str | None = None,
+        memory_context: str = "",
+        teaching_style: str = "friendly",
+        teaching_guidance: str = "",
+        detected_language: str = "en",
+        language_preference: str | None = None,
+        model_override: str | None = None,
     ) -> dict:
         total_start = time.time()
 
         # Route greetings / trivial prompts directly to the LLM
         if self._should_use_general_llm(question):
             answer, generation_time = self.llm.generate(
-                prompt=question, context="", temperature=temperature, intent=intent, verbosity=verbosity
+                prompt=question,
+                context="",
+                temperature=temperature,
+                intent=intent,
+                verbosity=verbosity,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=language_preference,
+                model_override=model_override,
             )
             return {
                 "question": original_question or question,
@@ -131,7 +186,17 @@ class RAGPipeline:
         # If the database is empty, go straight to general LLM
         if self.db.document_count() == 0:
             answer, generation_time = self.llm.generate(
-                prompt=question, context="", temperature=temperature, intent=intent, verbosity=verbosity
+                prompt=question,
+                context="",
+                temperature=temperature,
+                intent=intent,
+                verbosity=verbosity,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=language_preference,
+                model_override=model_override,
             )
             return {
                 "question": original_question or question,
@@ -146,8 +211,20 @@ class RAGPipeline:
                 },
             }
 
-        # Embed the query
-        query_embedding, query_emb_time = self.llm.get_embedding(question)
+        # Check cache first for similar queries
+        context_hash = hash(f"{memory_context}_{teaching_style}_{detected_language}")
+        cached_result = self._get_cached_query(question, context_hash)
+        if cached_result:
+            cached_result["from_cache"] = True
+            cached_result["timings"]["total"] = round(time.time() - total_start, 4)
+            return cached_result
+
+        # Try to get cached embedding for the query
+        query_embedding = self._get_cached_embedding(question)
+        query_emb_time = 0
+        if query_embedding is None:
+            query_embedding, query_emb_time = self.llm.get_embedding(question)
+            self._cache_embedding(question, query_embedding)
 
         # Vector search with metadata filtering if specific files are mentioned
         indexed_files = self.db.list_indexed_file_names()
@@ -217,7 +294,17 @@ class RAGPipeline:
         
         if not use_rag:
             answer, generation_time = self.llm.generate(
-                prompt=question, context="", temperature=temperature, intent=intent, verbosity=verbosity
+                prompt=question,
+                context="",
+                temperature=temperature,
+                intent=intent,
+                verbosity=verbosity,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=language_preference,
+                model_override=model_override,
             )
             return {
                 "question": original_question or question,
@@ -267,9 +354,15 @@ class RAGPipeline:
             temperature=temperature,
             intent=intent,
             verbosity=verbosity,
+            memory_context=memory_context,
+            teaching_style=teaching_style,
+            teaching_guidance=teaching_guidance,
+            detected_language=detected_language,
+            language_preference=language_preference,
+            model_override=model_override,
         )
 
-        return {
+        result = {
             "question": original_question or question,
             "normalized_question": question,
             "answer": answer,
@@ -284,7 +377,12 @@ class RAGPipeline:
                 "generation": round(generation_time, 4),
                 "total": round(time.time() - total_start, 4),
             },
+            "from_cache": False,
         }
+        
+        # Cache the result for future similar queries
+        self._cache_query(question, context_hash, result)
+        return result
 
     # ------------------------------------------------------------------ #
     # Direct LLM (no RAG)
@@ -297,10 +395,26 @@ class RAGPipeline:
         intent: str | None = None,
         verbosity: str | None = None,
         original_question: str | None = None,
+        memory_context: str = "",
+        teaching_style: str = "friendly",
+        teaching_guidance: str = "",
+        detected_language: str = "en",
+        language_preference: str | None = None,
+        model_override: str | None = None,
     ) -> dict:
         total_start = time.time()
         answer, generation_time = self.llm.generate(
-            prompt=question, context="", temperature=temperature, intent=intent, verbosity=verbosity
+            prompt=question,
+            context="",
+            temperature=temperature,
+            intent=intent,
+            verbosity=verbosity,
+            memory_context=memory_context,
+            teaching_style=teaching_style,
+            teaching_guidance=teaching_guidance,
+            detected_language=detected_language,
+            language_preference=language_preference,
+            model_override=model_override,
         )
         return {
             "question": original_question or question,

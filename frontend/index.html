@@ -184,6 +184,41 @@
                         <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.1" oninput="document.getElementById('temp-value').innerText = this.value">
                         <span id="temp-value" style="font-size:12px;color:var(--light-text);float:right">0.1</span>
                     </div>
+                    <div class="settings-group">
+                        <label>Teaching Style:</label>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+                            <label style="display:flex;align-items:center;cursor:pointer;gap:6px">
+                                <input type="radio" name="teaching-style" id="teaching-style-friendly" value="friendly" checked>
+                                <span>🤝 Friendly (encouraging, accessible)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;cursor:pointer;gap:6px">
+                                <input type="radio" name="teaching-style" id="teaching-style-strict" value="strict">
+                                <span>📚 Strict (focused, concise)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;cursor:pointer;gap:6px">
+                                <input type="radio" name="teaching-style" id="teaching-style-storytelling" value="storytelling">
+                                <span>📖 Storytelling (narrative, examples)</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <label>Response Language Preference:</label>
+                        <select id="language-preference">
+                            <option value="">🌍 Auto-detect (based on your input)</option>
+                            <option value="en">🇺🇸 English</option>
+                            <option value="hi">🇮🇳 Hindi</option>
+                            <option value="te">🇮🇳 Telugu</option>
+                        </select>
+                        <p style="font-size:12px;color:var(--light-text);margin-top:6px">Automatically detects your question language and responds accordingly. Override here if needed.</p>
+                    </div>
+                    <div class="settings-group">
+                        <label>Enable Translation Fallback:</label>
+                        <select id="translation-fallback-enabled">
+                            <option value="on">ON</option>
+                            <option value="off">OFF</option>
+                        </select>
+                        <p style="font-size:12px;color:var(--light-text);margin-top:6px">Automatically translates the LLM's response into the target language if the LLM fails to natively respond in the requested language.</p>
+                    </div>
                     <div class="settings-group settings-divider">
                         <label>Enable Voice Mode:</label>
                         <select id="voice-enabled">
@@ -229,6 +264,37 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn-primary" onclick="saveSettings()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Video Script Modal -->
+    <div id="video-script-modal" class="modal hidden">
+        <div class="modal-content video-script-content">
+            <div class="modal-header">
+                <h2>🎬 AI Video Script Generator</h2>
+                <button class="close-btn" onclick="toggleVideoScriptModal()">✕</button>
+            </div>
+            <div class="video-script-body">
+                <div id="video-script-loading" class="hidden">
+                    <div class="loading">
+                        <div class="loading-dot"></div>
+                        <div class="loading-dot"></div>
+                        <div class="loading-dot"></div>
+                    </div>
+                    <p>Generating cinematic scenes and narration...</p>
+                </div>
+                <div id="video-script-display" class="hidden">
+                    <div class="video-script-meta">
+                        <h3 id="video-script-title">Lesson Title</h3>
+                        <div class="video-script-actions">
+                            <button class="btn-small" onclick="copyVideoScriptJson()">📋 Copy JSON</button>
+                        </div>
+                    </div>
+                    <div id="video-script-timeline" class="video-script-timeline">
+                        <!-- Scenes will be injected here -->
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 import os
@@ -21,20 +21,26 @@ if __package__ in (None, ""):
     from backend.rag import RAGPipeline
     from backend.logger import ConversationLogger
     from backend.persistence import JsonPersistence
+    from backend.student_memory import StudentMemoryStore
     from backend.query_understanding import understand_query
     from backend.stt_service import STTService
     from backend.tts_service import TTSService
     from backend.wake_word import WakeWordService
+    from backend.language_service import get_language_service
+    from backend.video_service import get_video_service
 else:
     from .llm import OllamaLLM
     from .db import VectorDatabase
     from .rag import RAGPipeline
     from .logger import ConversationLogger
     from .persistence import JsonPersistence
+    from .student_memory import StudentMemoryStore
     from .query_understanding import understand_query
     from .stt_service import STTService
     from .tts_service import TTSService
     from .wake_word import WakeWordService
+    from .language_service import get_language_service
+    from .video_service import get_video_service
 
 
 # ------------------------------------------------------------------ #
@@ -59,6 +65,11 @@ if _available_models:
 print(f"[startup] Using model: {llm.model}")
 
 db = VectorDatabase(db_path="./data/chroma_db")
+student_memory_store = StudentMemoryStore(
+    llm=llm,
+    db_path="./data/chroma_db",
+    profile_path="./data/student_profiles.json",
+)
 rag = RAGPipeline(
     llm=llm,
     db=db,
@@ -184,6 +195,12 @@ class QueryRequest(BaseModel):
     question: str
     use_rag: bool = True
     temperature: float = 0.1
+    session_id: str | None = None
+    student_id: str | None = None
+    teaching_style_preference: str | None = None
+    language_preference: str | None = None  # Explicit language preference (e.g., 'en', 'es', 'fr')
+    use_translation_fallback: bool = True  # Optional fallback translation
+    model: str | None = None  # Optional model override
 
 
 class ChatHistoryPayload(BaseModel):
@@ -200,6 +217,16 @@ class QueryResponse(BaseModel):
     normalized_question: str | None = None
     intent: str | None = None
     verbosity: str | None = None
+    student_id: str | None = None
+    memory_matches: int = 0
+    memory_context_used: bool = False
+    teaching_style: str | None = None
+    performance_state: str | None = None
+    detected_language: str | None = None  # Detected language code (e.g., 'en', 'es')
+    detected_language_name: str | None = None  # Human-readable language name
+    language_confidence: float = 0.0  # Confidence of language detection (0-1)
+    response_language: str | None = None  # Language used for response
+    language_preference: str | None = None  # User's language preference
 
 
 class VoiceSettingsPayload(BaseModel):
@@ -216,6 +243,12 @@ class TTSPayload(BaseModel):
     tts_engine: str = "piper"
 
 
+class VideoScriptRequest(BaseModel):
+    lesson_text: str
+    language: str = "en"
+    model: str | None = None
+
+
 # ------------------------------------------------------------------ #
 # Routes
 # ------------------------------------------------------------------ #
@@ -229,6 +262,11 @@ async def root():
         "upload": "/upload",
         "docs": "/docs",
     }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/health")
@@ -393,14 +431,69 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/query", response_model=QueryResponse)
-async def query_documents(request: QueryRequest):
-    """Query documents via RAG or direct LLM."""
+@app.post("/query")
+async def query_endpoint(request: QueryRequest):
+    """Main query endpoint with RAG and personality."""
     try:
+        # Use request model if provided, otherwise default
+        current_model = request.model or llm.model
+        print(f"[query] Request from {request.student_id or 'anonymous'} (using model: {current_model})")
+        
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty")
 
+        student_id = (request.student_id or request.session_id or "default-student").strip() or "default-student"
+        session_id = (request.session_id or student_id).strip() or student_id
+        
+        # Set language preference if provided
+        if request.language_preference:
+            await run_in_threadpool(
+                student_memory_store.set_language_preference,
+                student_id,
+                request.language_preference,
+                session_id,
+            )
+        
+        # Set teaching style preference if provided
+        if request.teaching_style_preference:
+            await run_in_threadpool(
+                student_memory_store.set_teaching_style_preference,
+                student_id,
+                request.teaching_style_preference,
+                session_id,
+            )
+        
+        # Understand query (includes language detection)
         u = understand_query(request.question)
+        detected_language = u.detected_language
+        detected_language_name = u.detected_language_name
+        language_confidence = u.language_confidence
+        
+        # Get effective language preference (explicit or detected)
+        effective_language = await run_in_threadpool(
+            student_memory_store.get_language_preference,
+            student_id,
+            detected_language,
+            session_id,
+        )
+        
+        memory_snapshot = await run_in_threadpool(
+            student_memory_store.recall_context,
+            student_id,
+            u.improved_query,
+            session_id,
+            3,
+            u.is_follow_up,
+            u.follow_up_kind,
+        )
+        memory_context = memory_snapshot.get("context", "")
+        short_term_context = _get_conversation_context(session_id, max_messages=4)
+        if short_term_context:
+            memory_context = f"{short_term_context}\n\n{memory_context}".strip()
+        teaching_profile = memory_snapshot.get("teaching_profile") or {}
+        teaching_style = teaching_profile.get("teaching_style", "friendly")
+        teaching_guidance = teaching_profile.get("guidance", "")
+
         if request.use_rag:
             result = await run_in_threadpool(
                 rag.query,
@@ -409,6 +502,12 @@ async def query_documents(request: QueryRequest):
                 intent=u.intent,
                 verbosity=u.verbosity,
                 original_question=request.question,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=effective_language,
+                model_override=current_model,
             )
         else:
             result = await run_in_threadpool(
@@ -418,7 +517,53 @@ async def query_documents(request: QueryRequest):
                 intent=u.intent,
                 verbosity=u.verbosity,
                 original_question=request.question,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=effective_language,
+                model_override=current_model,
             )
+
+        # --- Translation Fallback Logic ---
+        if request.use_translation_fallback and effective_language and effective_language != "en":
+            try:
+                lang_service = get_language_service()
+                answer_lang = await run_in_threadpool(lang_service.detect_language, result["answer"])
+                
+                # If detected language does not match the target language, perform translation
+                if answer_lang.get("code") != effective_language:
+                    print(f"[Translation] LLM responded in {answer_lang.get('code')}. Translating to {effective_language}.")
+                    translation_result = await run_in_threadpool(
+                        lang_service.translate,
+                        result["answer"],
+                        source_lang=answer_lang.get("code", "auto"),
+                        target_lang=effective_language
+                    )
+                    if translation_result.get("success"):
+                        result["answer"] = translation_result.get("translated", result["answer"])
+            except Exception as e:
+                print(f"[Translation Fallback Error] {e}")
+
+        await run_in_threadpool(
+            student_memory_store.record_interaction,
+            student_id=student_id,
+            session_id=session_id,
+            question=request.question,
+            answer=result["answer"],
+            normalized_question=result.get("normalized_question", u.improved_query),
+            intent=u.intent,
+            verbosity=u.verbosity,
+            use_rag=request.use_rag,
+            retrieved_documents=result.get("retrieved_documents", 0),
+            retrieved_sources=result.get("retrieved_sources", []),
+            timings=result.get("timings", {}),
+            detected_language=detected_language,
+            is_follow_up=u.is_follow_up,
+        )
+
+        _save_to_conversation_memory(session_id, f"User: {request.question}")
+        _save_to_conversation_memory(session_id, f"Assistant: {result['answer']}")
 
         conversation_logger.log_interaction(
             question=request.question,
@@ -440,6 +585,16 @@ async def query_documents(request: QueryRequest):
             normalized_question=result.get("normalized_question"),
             intent=u.intent,
             verbosity=u.verbosity,
+            student_id=student_id,
+            memory_matches=len(memory_snapshot.get("matches", [])),
+            memory_context_used=bool(memory_context),
+            teaching_style=teaching_style,
+            performance_state=teaching_profile.get("performance_state"),
+            detected_language=detected_language,
+            detected_language_name=detected_language_name,
+            language_confidence=language_confidence,
+            response_language=effective_language,
+            language_preference=request.language_preference,
         )
 
     except HTTPException:
@@ -448,10 +603,33 @@ async def query_documents(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/generate-video-script")
+async def generate_video_script(request: VideoScriptRequest):
+    try:
+        lang_service = get_language_service()
+        lang_name = lang_service.get_supported_languages().get(request.language, "English")
+        
+        current_model = request.model or llm.model
+        print(f"[VideoScript] Generating script for lesson (lang: {lang_name}, model: {current_model})")
+        video_service = get_video_service(ollama_url=llm.base_url, model=current_model)
+        script = await run_in_threadpool(video_service.generate_script, request.lesson_text, lang_name)
+        
+        if "error" in script and not script.get("scenes"):
+             print(f"[VideoScript Error] Service returned error: {script.get('error')}")
+             raise HTTPException(status_code=500, detail=f"LLM Error: {script.get('error')}")
+             
+        return {"status": "success", "script": script}
+    except Exception as e:
+        print(f"[VideoScript Exception] {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/statistics")
 async def get_statistics():
     try:
-        return {"status": "success", "statistics": rag.get_statistics()}
+        statistics = rag.get_statistics()
+        statistics["memory"] = student_memory_store.get_stats()
+        return {"status": "success", "statistics": statistics}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

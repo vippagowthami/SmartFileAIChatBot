@@ -1,0 +1,127 @@
+{
+  "students": {
+    "student-cae4f41d-895d-482e-b270-5318fbac67b3": {
+      "student_id": "student-cae4f41d-895d-482e-b270-5318fbac67b3",
+      "created_at": "2026-05-07T15:29:46.181070+00:00",
+      "updated_at": "2026-05-07T15:30:59.508721+00:00",
+      "interaction_count": 3,
+      "session_ids": [
+        "1778167786103"
+      ],
+      "topic_stats": {
+        "other": {
+          "asked_count": 1,
+          "weakness_score": 1.0,
+          "last_seen_at": "2026-05-07T15:29:46.773281+00:00",
+          "last_session_id": "1778167786103",
+          "examples": [
+            "hi"
+          ]
+        },
+        "python": {
+          "asked_count": 2,
+          "weakness_score": 2.0,
+          "last_seen_at": "2026-05-07T15:30:59.508721+00:00",
+          "last_session_id": "1778167786103",
+          "examples": [
+            "what is python"
+          ]
+        }
+      },
+      "weak_topics": [
+        {
+          "topic": "python",
+          "score": 2.0,
+          "asked_count": 2,
+          "last_seen_at": "2026-05-07T15:30:59.508721+00:00"
+        },
+        {
+          "topic": "other",
+          "score": 1.0,
+          "asked_count": 1,
+          "last_seen_at": "2026-05-07T15:29:46.773281+00:00"
+        }
+      ],
+      "recent_topics": [
+        "other",
+        "python"
+      ],
+      "recent_interactions": [
+        {
+          "timestamp": "2026-05-07T15:29:46.773281+00:00",
+          "session_id": "1778167786103",
+          "question": "hi",
+          "answer_preview": "Hello! Great to see you again. How can I help you today?",
+          "topic": "other",
+          "intent": "other",
+          "weak_signal": true,
+          "entities": []
+        },
+        {
+          "timestamp": "2026-05-07T15:30:18.243282+00:00",
+          "session_id": "1778167786103",
+          "question": "what is python",
+          "answer_preview": "Python is a high-level, interpreted programming language that is widely used for various purposes such as web development, scientific computing, data analysis, artificial intelligence, and more. It is known for its simp\u2026",
+          "topic": "python",
+          "intent": "definition",
+          "weak_signal": true,
+          "entities": [
+            "python"
+          ]
+        },
+        {
+          "timestamp": "2026-05-07T15:30:59.508721+00:00",
+          "session_id": "1778167786103",
+          "question": "what is python",
+          "answer_preview": "Python is a high-level, interpreted programming language that is widely used for various purposes such as web development, scientific computing, data analysis, artificial intelligence, and more. It is known for its simp\u2026",
+          "topic": "python",
+          "intent": "definition",
+          "weak_signal": true,
+          "entities": [
+            "python"
+          ]
+        }
+      ],
+      "language_preference": null,
+      "detected_languages": {
+        "en": 3
+      },
+      "preferred_language_updated_at": null,
+      "learning_level": null,
+      "learning_level_updated_at": null,
+      "goals": [],
+      "preferences": [],
+      "preferred_name": null,
+      "preferred_name_updated_at": null,
+      "personal_facts": [],
+      "entity_stats": {
+        "python": {
+          "count": 2,
+          "last_seen_at": "2026-05-07T15:30:59.508721+00:00"
+        }
+      },
+      "active_entities": [
+        "python"
+      ],
+      "teaching_style_preference": "friendly",
+      "teaching_style_updated_at": "2026-05-07T15:30:39.589166+00:00",
+      "performance_state": "mixed",
+      "performance_score": 0.66,
+      "teaching_style_resolved": "strict",
+      "teaching_style_resolution": {
+        "student_id": "student-cae4f41d-895d-482e-b270-5318fbac67b3",
+        "teaching_style_preference": "strict",
+        "teaching_style": "strict",
+        "performance_state": "mixed",
+        "performance_score": 0.41,
+        "guidance": "Teaching style: strict\nStudent preference: strict\nPerformance state: mixed (score=0.41)\nKnown weak topics: other, python\nStyle guidance: Teach with precision, brevity, and rigor. State the answer directly, correct mistakes clearly, and add a short checkpoint or mini-test when useful.\nPerformance guidance: The student is making partial progress. Balance clarity with challenge and briefly reinforce weak spots.\nCurrent question: What is python"
+      },
+      "last_seen_at": "2026-05-07T15:30:59.508721+00:00",
+      "last_question": "what is python",
+      "last_answer_preview": "Python is a high-level, interpreted programming language that is widely used for various purposes such as web development, scientific computing, data analysis, artificial intelligence, and more. It is known for its simp\u2026",
+      "last_intent": "definition",
+      "last_verbosity": "concise",
+      "last_follow_up": false
+    }
+  }
+}

@@ -87,12 +87,16 @@ class VectorDatabase:
             return {"results": [], "retrieval_time": time.time() - start}
 
         n = min(num_results, count)
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
+        try:
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as e:
+            print(f"[Database Error] Search failed: {e}")
+            return {"results": [], "retrieval_time": time.time() - start}
 
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]

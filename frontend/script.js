@@ -4,9 +4,11 @@ let CONFIG = {
     USE_RAG: true,
     NUM_RETRIEVAL: 5,
     MODEL: "llama3",
-    QUERY_TIMEOUT_MS: 130000,
+    QUERY_TIMEOUT_MS: 60000,  // Reduced from 130000 for better responsiveness
     THEME: "light",
     TEMPERATURE: 0.1,
+    TEACHING_STYLE: "friendly",
+    USE_TRANSLATION_FALLBACK: true,
     VOICE: {
         ENABLED: true,
         WAKE_ENABLED: false,
@@ -18,6 +20,34 @@ let CONFIG = {
     },
 };
 
+// Add response caching for better performance
+const responseCache = new Map();
+const CACHE_MAX_SIZE = 100;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(question, options) {
+    return `${question}_${JSON.stringify(options)}`;
+}
+
+function getCachedResponse(cacheKey) {
+    const cached = responseCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+        return cached.data;
+    }
+    return null;
+}
+
+function setCachedResponse(cacheKey, data) {
+    if (responseCache.size >= CACHE_MAX_SIZE) {
+        const firstKey = responseCache.keys().next().value;
+        responseCache.delete(firstKey);
+    }
+    responseCache.set(cacheKey, {
+        data,
+        timestamp: Date.now()
+    });
+}
+
 let documents = [];
 let isWaitingForResponse = false;
 let chatHistory = [];
@@ -26,9 +56,24 @@ let currentAudio = null;
 let wakePollTimer = null;
 let wakeEventCursor = 0;
 let aiMessageCounter = 0;
+let healthRetryTimer = null;
 const ttsCache = new Map();
 // New map to track per-message audio objects
 const ttsAudioMap = new Map();
+
+function getOrCreateStudentId() {
+    const storageKey = "studentMemoryId";
+    let id = localStorage.getItem(storageKey);
+    if (!id) {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+            id = `student-${window.crypto.randomUUID()}`;
+        } else {
+            id = `student-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        }
+        localStorage.setItem(storageKey, id);
+    }
+    return id;
+}
 
 // Voice runtime state
 let voiceState = "idle"; // idle | listening | processing | speaking
@@ -46,9 +91,10 @@ let recordingTrigger = "manual";
 document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     setStatus("Connecting...", "");
-    checkHealth();
+    startHealthMonitoring();
     loadChatHistory();
     loadIndexedFiles();
+    getOrCreateStudentId();
 
     const saved = localStorage.getItem("currentChatId");
     if (saved && chatHistory.length > 0) {
@@ -69,6 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initVoiceUI();
     syncVoiceSettingsToBackend();
     updateWakePolling();
+    refreshModelsFromBackend();
 });
 
 function setSidebarPane(pane) {
@@ -99,6 +146,7 @@ async function checkHealth() {
         const data = await res.json();
         if (res.ok) {
             setStatus(data.ollama?.available ? "Connected" : "Connected (local mode)", "connected");
+            stopHealthMonitoring();
         }
         return res.ok;
     } catch {
@@ -107,10 +155,62 @@ async function checkHealth() {
     }
 }
 
+function startHealthMonitoring() {
+    if (healthRetryTimer) {
+        clearInterval(healthRetryTimer);
+    }
+    checkHealth();
+    healthRetryTimer = setInterval(async () => {
+        const healthy = await checkHealth();
+        if (healthy) {
+            stopHealthMonitoring();
+        }
+    }, 3000);
+}
+
+function stopHealthMonitoring() {
+    if (healthRetryTimer) {
+        clearInterval(healthRetryTimer);
+        healthRetryTimer = null;
+    }
+}
+
 function fetchWithTimeout(url, timeoutMs = 10000, options = {}) {
     const ctrl = new AbortController();
     const id = setTimeout(() => ctrl.abort(), timeoutMs);
     return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(id));
+}
+
+async function refreshModelsFromBackend() {
+    try {
+        const response = await fetch(`${CONFIG.BACKEND_URL}/models`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.available_models && data.available_models.length > 0) {
+            const select = document.getElementById("model-select");
+            if (select) {
+                const current = CONFIG.MODEL;
+                select.innerHTML = "";
+                data.available_models.forEach(m => {
+                    const opt = document.createElement("option");
+                    opt.value = m;
+                    opt.textContent = m;
+                    select.appendChild(opt);
+                });
+                
+                // If current model is not in list, pick the first one or the backend's default
+                if (!data.available_models.includes(current)) {
+                    CONFIG.MODEL = data.current_model || data.available_models[0];
+                    select.value = CONFIG.MODEL;
+                    localStorage.setItem("chatbot-config", JSON.stringify(CONFIG));
+                } else {
+                    select.value = current;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Failed to fetch models from backend:", e);
+    }
 }
 
 function setStatus(message, className = "") {
@@ -551,6 +651,10 @@ async function sendMessage() {
     const message = input.value.trim();
     if (!message || isWaitingForResponse) return;
 
+    const studentId = getOrCreateStudentId();
+    const sessionId = currentChatId || Date.now().toString();
+    if (!currentChatId) currentChatId = sessionId;
+
     stopCurrentAudio();
     input.value = "";
     input.disabled = true;
@@ -562,6 +666,28 @@ async function sendMessage() {
 
     try {
         const useRAG = document.getElementById("use-rag").checked;
+        
+        // Check cache first
+        const cacheOptions = {
+            use_rag: useRAG,
+            temperature: CONFIG.TEMPERATURE ?? 0.1,
+            model: CONFIG.MODEL,
+            teaching_style_preference: CONFIG.TEACHING_STYLE || "friendly",
+            use_translation_fallback: CONFIG.USE_TRANSLATION_FALLBACK !== false,
+            language_preference: document.getElementById("language-preference")?.value || null,
+        };
+        const cacheKey = getCacheKey(message, cacheOptions);
+        const cachedResponse = getCachedResponse(cacheKey);
+        
+        if (cachedResponse) {
+            removeLoadingIndicator(loadingId);
+            const formattedResponse = formatResponse(cachedResponse);
+            addMessageToChat(formattedResponse, "ai", data);
+            isWaitingForResponse = false;
+            input.disabled = false;
+            setStatus("Ready", "Response from cache");
+            return;
+        }
 
         const response = await fetchWithTimeout(
             `${CONFIG.BACKEND_URL}/query`,
@@ -573,6 +699,12 @@ async function sendMessage() {
                     question: message,
                     use_rag: useRAG,
                     temperature: CONFIG.TEMPERATURE ?? 0.1,
+                    session_id: sessionId,
+                    student_id: studentId,
+                    model: CONFIG.MODEL,
+                    teaching_style_preference: CONFIG.TEACHING_STYLE || "friendly",
+                    use_translation_fallback: CONFIG.USE_TRANSLATION_FALLBACK !== false,
+                    language_preference: document.getElementById("language-preference")?.value || null,
                 }),
             }
         );
@@ -585,6 +717,10 @@ async function sendMessage() {
         }
 
         const data = await response.json();
+        
+        // Cache the response for future use
+        setCachedResponse(cacheKey, data);
+        
         const formattedResponse = formatResponse(data);
         const msgId = addMessageToChat(formattedResponse, "ai", data);
         setStatus("Connected", "connected");
@@ -655,6 +791,7 @@ function addMessageToChat(content, type, data = null) {
             <button class="tts-pause-btn tts-ctrl-btn hidden" onclick="pauseTTS('${messageId}')" title="Pause">⏸️ Pause</button>
             <button class="tts-resume-btn tts-ctrl-btn hidden" onclick="resumeTTS('${messageId}')" title="Resume">▶️ Resume</button>
             <button class="tts-stop-btn tts-ctrl-btn hidden" onclick="stopTTS('${messageId}')" title="Stop">⏹️ Stop</button>
+            <button class="video-script-btn tts-ctrl-btn" onclick="generateVideoScript('${messageId}')" title="Generate Video Script">🎬 Video Script</button>
         `;
         bubbleDiv.appendChild(actions);
     }
@@ -693,24 +830,55 @@ function removeLoadingIndicator(id) {
 
 // ==================== Response Formatting ====================
 function markdownToHtml(text) {
-    let html = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+    if (!text) return "";
+    
+    // 1. Handle Blackboard Steps
+    const blackboardRegex = /\[BLACKBOARD_STEP:\s*(.*?)\]([\s\S]*?)\[\/BLACKBOARD_STEP\]/g;
+    const totalSteps = (text.match(blackboardRegex) || []).length;
+    let stepIndex = 0;
+    
+    let processedText = text.replace(blackboardRegex, (match, title, body) => {
+        stepIndex++;
+        return `@@BLACKBOARD_START@@${stepIndex}@@${totalSteps}@@${title}@@${body.trim()}@@BLACKBOARD_END@@`;
+    });
 
-    html = html.replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+    // 2. Basic Markdown to HTML
+    function basicFormat(t) {
+        let html = t
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
 
-    html = html.replace(/(?:^|\n)(\d+)\.\s+(.+)/g, (_, n, item) => `\n<li>${item}</li>`);
-    html = html.replace(/(?:^|\n)[-•]\s+(.+)/g, (_, item) => `\n<li>${item}</li>`);
-    html = html.replace(/(<li>[\s\S]*?<\/li>(\s*<li>[\s\S]*?<\/li>)*)/g, "<ul>$1</ul>");
-    html = html.replace(/\n\n+/g, "</p><p>");
-    html = html.replace(/\n/g, "<br>");
+        html = html.replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+        html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+        html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+        html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
 
-    return `<p>${html}</p>`;
+        html = html.replace(/(?:^|\n)(\d+)\.\s+(.+)/g, (_, n, item) => `\n<li>${item}</li>`);
+        html = html.replace(/(?:^|\n)[-•]\s+(.+)/g, (_, item) => `\n<li>${item}</li>`);
+        html = html.replace(/(<li>[\s\S]*?<\/li>(\s*<li>[\s\S]*?<\/li>)*)/g, "<ul>$1</ul>");
+        html = html.replace(/\n\n+/g, "</p><p>");
+        html = html.replace(/\n/g, "<br>");
+        return `<p>${html}</p>`;
+    }
+
+    let finalHtml = basicFormat(processedText);
+
+    // 3. Swap back placeholders for styled Blackboard elements
+    finalHtml = finalHtml.replace(/@@BLACKBOARD_START@@(\d+)@@(\d+)@@(.*?)@@([\s\S]*?)@@BLACKBOARD_END@@/g, (match, idx, total, title, body) => {
+        // Clean up the body from p tags basicFormat might have added
+        const cleanBody = body.replace(/<\/?p>/g, "").replace(/<br>/g, "\n");
+        return `
+            <div class="blackboard-step">
+                <div class="blackboard-step-number">Step ${idx} of ${total}</div>
+                <div class="blackboard-header">${title || 'Concept Breakdown'}</div>
+                <div class="blackboard-content">${basicFormat(cleanBody)}</div>
+            </div>
+        `;
+    });
+
+    return finalHtml;
 }
 
 function formatResponse(data) {
@@ -929,6 +1097,14 @@ function loadSettingsIntoModal() {
     if (el("temperature")) el("temperature").value = CONFIG.TEMPERATURE ?? 0.1;
     if (el("temp-value")) el("temp-value").innerText = CONFIG.TEMPERATURE ?? 0.1;
 
+    // Load teaching style preference
+    const teachingStyleRadios = document.querySelectorAll("input[name='teaching-style']");
+    teachingStyleRadios.forEach(radio => {
+        radio.checked = radio.value === (CONFIG.TEACHING_STYLE || "friendly");
+    });
+
+    if (el("translation-fallback-enabled")) el("translation-fallback-enabled").value = CONFIG.USE_TRANSLATION_FALLBACK !== false ? "on" : "off";
+
     if (el("voice-enabled")) el("voice-enabled").value = CONFIG.VOICE.ENABLED ? "on" : "off";
     if (el("wake-enabled")) el("wake-enabled").value = CONFIG.VOICE.WAKE_ENABLED ? "on" : "off";
     if (el("wake-text")) el("wake-text").value = CONFIG.VOICE.WAKE_TEXT;
@@ -945,6 +1121,14 @@ function saveSettings() {
     if (el("theme-select")) CONFIG.THEME = el("theme-select").value;
     if (el("temperature")) CONFIG.TEMPERATURE = parseFloat(el("temperature").value);
 
+    // Save teaching style preference
+    const selectedTeachingStyle = document.querySelector("input[name='teaching-style']:checked");
+    if (selectedTeachingStyle) {
+        CONFIG.TEACHING_STYLE = selectedTeachingStyle.value;
+    }
+
+    if (el("translation-fallback-enabled")) CONFIG.USE_TRANSLATION_FALLBACK = el("translation-fallback-enabled").value === "on";
+
     if (el("voice-enabled")) CONFIG.VOICE.ENABLED = el("voice-enabled").value === "on";
     if (el("wake-enabled")) CONFIG.VOICE.WAKE_ENABLED = el("wake-enabled").value === "on";
     if (el("wake-text")) CONFIG.VOICE.WAKE_TEXT = el("wake-text").value || "Hey Smart";
@@ -960,7 +1144,7 @@ function saveSettings() {
     updateWakePolling();
     syncVoiceSettingsToBackend();
     toggleSettings();
-    addMessageToChat("⚙️ Settings saved.", "ai");
+    addMessageToChat("⚙️ Settings saved. Teaching style set to: " + CONFIG.TEACHING_STYLE, "ai");
 }
 
 function applyTheme() {
@@ -984,14 +1168,29 @@ function loadSettings() {
                     ...(parsed.VOICE || {}),
                 },
             };
-            if (typeof CONFIG.BACKEND_URL === "string" && CONFIG.BACKEND_URL.includes(":8000")) {
+                if (!CONFIG.BACKEND_URL) {
+                    CONFIG.BACKEND_URL = "http://127.0.0.1:8001";
+                }
+                if (typeof CONFIG.BACKEND_URL === "string" && CONFIG.BACKEND_URL.includes(":8000")) {
                 CONFIG.BACKEND_URL = CONFIG.BACKEND_URL.replace(":8000", ":8001");
+            }
+                if (typeof CONFIG.BACKEND_URL === "string" && CONFIG.BACKEND_URL.trim() === "http://127.0.0.1:8000") {
+                    CONFIG.BACKEND_URL = "http://127.0.0.1:8001";
+                }
+            // Ensure teaching style has a valid value
+            if (!CONFIG.TEACHING_STYLE || !["friendly", "strict", "storytelling"].includes(CONFIG.TEACHING_STYLE)) {
+                CONFIG.TEACHING_STYLE = "friendly";
             }
             localStorage.setItem("chatbot-config", JSON.stringify(CONFIG));
             applyTheme();
         } catch {
             // Ignore malformed local settings
         }
+        } else {
+            localStorage.setItem(
+                "chatbot-config",
+                JSON.stringify({ ...CONFIG, BACKEND_URL: "http://127.0.0.1:8001" })
+            );
     }
 }
 
@@ -1262,6 +1461,7 @@ function loadChatSession(chatId) {
                     <button class="tts-pause-btn tts-ctrl-btn hidden" onclick="pauseTTS('${msg.id}')" title="Pause">⏸️ Pause</button>
                     <button class="tts-resume-btn tts-ctrl-btn hidden" onclick="resumeTTS('${msg.id}')" title="Resume">▶️ Resume</button>
                     <button class="tts-stop-btn tts-ctrl-btn hidden" onclick="stopTTS('${msg.id}')" title="Stop">⏹️ Stop</button>
+                    <button class="video-script-btn tts-ctrl-btn" onclick="generateVideoScript('${msg.id}')" title="Generate Video Script">🎬 Video Script</button>
                 `;
                 bubble.appendChild(actions);
             }
@@ -1275,6 +1475,94 @@ function loadChatSession(chatId) {
     localStorage.setItem("currentChatId", currentChatId);
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
+
+// ==================== Video Script Generator ====================
+let currentVideoScript = null;
+
+function toggleVideoScriptModal() {
+    const modal = document.getElementById("video-script-modal");
+    modal.classList.toggle("hidden");
+    if (!modal.classList.contains("hidden")) {
+        modal.style.display = "flex";
+    } else {
+        modal.style.display = "none";
+    }
+}
+
+async function generateVideoScript(messageId) {
+    const msg = chatHistory.find(m => m.id === messageId);
+    if (!msg) return;
+
+    toggleVideoScriptModal();
+    const loading = document.getElementById("video-script-loading");
+    const display = document.getElementById("video-script-display");
+    loading.classList.remove("hidden");
+    display.classList.add("hidden");
+
+    try {
+        const response = await fetch(`${CONFIG.BACKEND_URL}/generate-video-script`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                lesson_text: msg.rawText || msg.content,
+                model: CONFIG.MODEL,
+                language: document.getElementById("language-preference")?.value || "en"
+            })
+        });
+
+        if (!response.ok) {
+            let errorDetail = "Failed to generate video script";
+            try {
+                const errData = await response.json();
+                errorDetail = errData.detail || errorDetail;
+            } catch (e) {}
+            throw new Error(errorDetail);
+        }
+        const data = await response.json();
+        currentVideoScript = data.script;
+        renderVideoScript(data.script);
+        
+        loading.classList.add("hidden");
+        display.classList.remove("hidden");
+    } catch (error) {
+        alert("Error generating video script: " + error.message);
+        toggleVideoScriptModal();
+    }
+}
+
+function renderVideoScript(script) {
+    document.getElementById("video-script-title").textContent = script.title || "Lesson Video Script";
+    const timeline = document.getElementById("video-script-timeline");
+    timeline.innerHTML = "";
+
+    const scenes = script.scenes || [];
+    scenes.forEach(scene => {
+        const card = document.createElement("div");
+        card.className = "video-scene-card";
+        card.innerHTML = `
+            <div class="scene-number">${scene.id}</div>
+            <div class="scene-visual">
+                <h4>Visual Prompt (AI Model Ready)</h4>
+                <div class="visual-prompt-text">${scene.visual_prompt}</div>
+                ${scene.on_screen_text ? `<div style="font-size:10px; color:#64748b; margin-top:4px">TEXT: ${scene.on_screen_text}</div>` : ""}
+            </div>
+            <div class="scene-audio">
+                <h4>Narration / Audio</h4>
+                <div class="narration-text">${scene.narration}</div>
+                <div style="font-size:11px; color:var(--primary-color); margin-top:8px">⏱ ~${scene.duration_estimate || 10}s</div>
+            </div>
+        `;
+        timeline.appendChild(card);
+    });
+}
+
+function copyVideoScriptJson() {
+    if (!currentVideoScript) return;
+    navigator.clipboard.writeText(JSON.stringify(currentVideoScript, null, 2))
+        .then(() => setStatus("JSON copied to clipboard", "connected"))
+        .catch(() => setStatus("Failed to copy JSON", "error"));
+}
+
 
 // ==================== Chat Control ====================
 function newChat() {

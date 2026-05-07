@@ -1,5 +1,10 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+try:
+    from .language_service import get_language_service
+except ImportError:
+    from language_service import get_language_service
 
 
 @dataclass(frozen=True)
@@ -7,6 +12,11 @@ class QueryUnderstanding:
     improved_query: str
     intent: str  # definition | explanation | comparison | list | deep_dive | other
     verbosity: str  # concise | medium | detailed
+    is_follow_up: bool = False
+    follow_up_kind: str = "none"  # none | pronoun_reference | continuation | clarification
+    detected_language: str = "en"  # ISO 639-1 language code
+    detected_language_name: str = "English"  # Human-readable language name
+    language_confidence: float = 0.0  # Confidence score (0-1)
 
 
 _MULTISPACE = re.compile(r"\s+")
@@ -116,9 +126,79 @@ def choose_verbosity(query: str, intent: str) -> str:
     return "medium"
 
 
+def detect_follow_up(query: str) -> tuple[bool, str]:
+    q = _basic_normalize(query).lower()
+    if not q:
+        return False, "none"
+
+    continuation_phrases = (
+        "continue",
+        "go on",
+        "tell me more",
+        "more about",
+        "next",
+        "and then",
+    )
+    clarification_phrases = (
+        "what do you mean",
+        "can you clarify",
+        "explain that",
+        "what about",
+        "how about",
+    )
+    pronoun_markers = (
+        "it",
+        "that",
+        "this",
+        "they",
+        "them",
+        "those",
+        "these",
+        "he",
+        "she",
+        "its",
+    )
+
+    if any(phrase in q for phrase in continuation_phrases):
+        return True, "continuation"
+    if any(phrase in q for phrase in clarification_phrases):
+        return True, "clarification"
+
+    tokens = q.split()
+    # Short pronoun-heavy queries often refer to previous turn context.
+    if len(tokens) <= 8 and any(tok in pronoun_markers for tok in tokens):
+        return True, "pronoun_reference"
+
+    return False, "none"
+
+
 def understand_query(user_input: str) -> QueryUnderstanding:
     improved = normalize_query(user_input)
     intent = detect_intent(improved)
     verbosity = choose_verbosity(improved, intent)
-    return QueryUnderstanding(improved_query=improved, intent=intent, verbosity=verbosity)
+    is_follow_up, follow_up_kind = detect_follow_up(improved)
+    
+    # Detect language
+    try:
+        lang_service = get_language_service()
+        lang_detection = lang_service.detect_language(user_input)
+        detected_lang = lang_detection.get("code", "en")
+        detected_lang_name = lang_detection.get("name", "English")
+        lang_confidence = lang_detection.get("confidence", 0.0)
+    except Exception as e:
+        print(f"[query_understanding] Language detection failed: {e}")
+        detected_lang = "en"
+        detected_lang_name = "English"
+        lang_confidence = 0.0
+    
+    return QueryUnderstanding(
+        improved_query=improved,
+        intent=intent,
+        verbosity=verbosity,
+        is_follow_up=is_follow_up,
+        follow_up_kind=follow_up_kind,
+        detected_language=detected_lang,
+        detected_language_name=detected_lang_name,
+        language_confidence=lang_confidence,
+    )
 

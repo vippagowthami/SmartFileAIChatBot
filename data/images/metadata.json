@@ -1,0 +1,27 @@
+{
+  "204fee0f670b3800": {
+    "image_id": "204fee0f670b3800",
+    "prompt": "sunflower in the early morning",
+    "image_path": "data\\images\\originals\\204fee0f670b3800.png",
+    "thumbnail_path": "data\\images\\thumbnails\\204fee0f670b3800_thumb.png",
+    "generation_time": 0.027869224548339844,
+    "parameters": {
+      "prompt": "sunflower in the early morning",
+      "negative_prompt": "cartoon, anime, blurry, low quality",
+      "style": "realistic",
+      "aspect_ratio": "16:9",
+      "width": 512,
+      "height": 512,
+      "steps": 25,
+      "guidance_scale": 7.5,
+      "seed": null,
+      "user_id": "test_user",
+      "session_id": "test_session"
+    },
+    "timestamp": 1778148394.9795673,
+    "user_id": "test_user",
+    "session_id": "test_session",
+    "file_size": 17380,
+    "nsfw_score": 0.0
+  }
+}

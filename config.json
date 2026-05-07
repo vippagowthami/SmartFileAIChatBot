@@ -7,12 +7,12 @@
     "debug": true
   },
   "rag_config": {
-    "chunk_size": 600,
-    "chunk_overlap": 120,
+    "chunk_size": 800,
+    "chunk_overlap": 150,
     "num_retrieval": 3,
     "temperature": 0.1,
     "top_p": 0.9,
-    "relevance_threshold": 0.45
+    "relevance_threshold": 0.5
   },
   "database": {
     "type": "chromadb",

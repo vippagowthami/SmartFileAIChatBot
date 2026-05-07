@@ -69,7 +69,7 @@ class OllamaLLM:
             response = requests.post(
                 self.embed_endpoint,
                 json=payload,
-                timeout=60,  # generous timeout for large batches
+                timeout=30,  # Reduced timeout for better responsiveness
             )
 
             if response.status_code == 404:
@@ -79,7 +79,7 @@ class OllamaLLM:
                     lr = requests.post(
                         self.legacy_embeddings_endpoint,
                         json=legacy_payload,
-                        timeout=30,
+                        timeout=15,  # Reduced timeout
                     )
                     lr.raise_for_status()
                     return [lr.json().get("embedding", vectorize_text(texts[0]))], time.time() - start
@@ -117,13 +117,42 @@ class OllamaLLM:
         *,
         intent: str | None = None,
         verbosity: str | None = None,
+        memory_context: str = "",
+        teaching_style: str = "friendly",
+        teaching_guidance: str = "",
+        detected_language: str = "en",
+        language_preference: str | None = None,
+        model_override: str | None = None,
     ) -> tuple[str, float]:
         """Generate a response. Uses RAG context when available."""
         start = time.time()
         if context.strip():
-            answer = self._generate_document_answer(prompt, context, temperature, intent=intent, verbosity=verbosity)
+            answer = self._generate_document_answer(
+                prompt,
+                context,
+                temperature,
+                intent=intent,
+                verbosity=verbosity,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=language_preference,
+                model_override=model_override,
+            )
         else:
-            answer = self._generate_general_answer(prompt, temperature, intent=intent, verbosity=verbosity)
+            answer = self._generate_general_answer(
+                prompt,
+                temperature,
+                intent=intent,
+                verbosity=verbosity,
+                memory_context=memory_context,
+                teaching_style=teaching_style,
+                teaching_guidance=teaching_guidance,
+                detected_language=detected_language,
+                language_preference=language_preference,
+                model_override=model_override,
+            )
         return answer, time.time() - start
 
     # ------------------------------------------------------------------ #
@@ -137,28 +166,52 @@ class OllamaLLM:
         *,
         intent: str | None = None,
         verbosity: str | None = None,
+        memory_context: str = "",
+        teaching_style: str = "friendly",
+        teaching_guidance: str = "",
+        detected_language: str = "en",
+        language_preference: str | None = None,
+        model_override: str | None = None,
     ) -> str:
         """Generation specifically for when we HAVE document context."""
         
         # Determine depth based on intent and verbosity
         depth_instruction = "Provide a concise, direct answer."
         if verbosity == "detailed" or intent in {"deep_dive", "explanation"}:
-            depth_instruction = "Provide a direct answer first, followed by a detailed expert analysis with clear sections and bullet points."
+            depth_instruction = (
+                "Provide a direct answer first, then a clear step-by-step explanation using plain headings and bullet points."
+            )
         elif verbosity == "medium" or intent in {"list", "comparison"}:
             depth_instruction = "Provide a balanced, informative answer with relevant details."
 
+        # Build language directive
+        response_lang = language_preference or detected_language or "en"
+        lang_map = {
+            "en": "English",
+            "hi": "Hindi",
+            "te": "Telugu",
+        }
+        lang_name = lang_map.get(response_lang, response_lang)
+        language_directive = f"RESPOND IN {lang_name.upper()} ({response_lang.upper()}) ONLY.\n"
+
         system_message = (
-            "You are Smart File AI, an expert analytical assistant. Your goal is to provide high-quality answers derived EXCLUSIVELY from the provided DOCUMENT CONTEXT.\n\n"
+            "You are Smart File AI, an expert analytical assistant. Your goal is to provide high-quality answers derived EXCLUSIVELY from the provided DOCUMENT CONTEXT.\n"
+            "You may use STUDENT MEMORY for continuity, personalization, and to understand prior attempts, but document facts must still come only from the document context.\n\n"
+            f"{language_directive}"
+            f"TEACHING STYLE: {teaching_style}\n"
+            f"TEACHING GUIDANCE:\n{teaching_guidance or 'Use the teaching style naturally and adapt to the student.'}\n\n"
             "RULES:\n"
             "1. ANSWER-FIRST: Start your response with the most direct answer to the question. Avoid introductory phrases.\n"
             "2. CITATIONS: Every claim or fact MUST be cited immediately using brackets, e.g., [Source 1], [Source 2]. Use the labels provided in the context.\n"
             "3. NO HALLUCINATION: If the answer is not in the context, state: 'I'm sorry, but the provided documents do not contain information to answer this question.'\n"
             "4. FORMATTING: Use Markdown (bolding, lists) for readability.\n"
+            "5. NEVER reveal internal notes, memory metadata, scores, hidden reasoning, or analysis traces.\n"
             f"STYLE: {depth_instruction}"
         )
 
         prompt_payload = (
             f"{system_message}\n\n"
+            f"STUDENT MEMORY:\n{memory_context or 'No stored memory available.'}\n\n"
             f"DOCUMENT CONTEXT:\n{context}\n\n"
             f"USER QUESTION: {prompt}\n\n"
             f"EXPERT ANSWER (Source-Based Only):"
@@ -168,7 +221,7 @@ class OllamaLLM:
             response = requests.post(
                 self.generate_endpoint,
                 json={
-                    "model": self.model,
+                    "model": model_override or self.model,
                     "prompt": prompt_payload,
                     "stream": False,
                     "options": {
@@ -177,7 +230,7 @@ class OllamaLLM:
                         "num_predict": 2500,
                     },
                 },
-                timeout=120,
+                timeout=60,  # Reduced timeout for better responsiveness
             )
             if response.status_code != 200:
                 print(f"[Ollama Error] {response.status_code}: {response.text}")
@@ -207,14 +260,43 @@ class OllamaLLM:
         *,
         intent: str | None = None,
         verbosity: str | None = None,
+        memory_context: str = "",
+        teaching_style: str = "friendly",
+        teaching_guidance: str = "",
+        detected_language: str = "en",
+        language_preference: str | None = None,
+        model_override: str | None = None,
     ) -> str:
         # Handle greetings with a fast static response
         if self._is_greeting_prompt(prompt):
-            return self._greeting_response(prompt)
+            return self._greeting_response(prompt, memory_context=memory_context)
+
+        # Build language directive
+        response_lang = language_preference or detected_language or "en"
+        lang_map = {
+            "en": "English",
+            "hi": "Hindi",
+            "te": "Telugu",
+        }
+        lang_name = lang_map.get(response_lang, response_lang)
+        language_directive = f"RESPOND IN {lang_name.upper()} ({response_lang.upper()}) ONLY.\n"
+
+        # Determine depth for general answers
+        depth_instruction = ""
+        if verbosity == "detailed" or intent in {"deep_dive", "explanation"}:
+            depth_instruction = (
+                "Use a clear, step-by-step explanation in natural language with concise headings."
+            )
 
         # Clear directive to avoid conversational confusion
         prompt_payload = (
             "Instruction: Directly answer the user's question clearly and accurately.\n\n"
+            f"{language_directive}"
+            f"STYLE: {depth_instruction}\n"
+            "DO NOT expose internal memory, scoring, or reasoning traces in the output.\n"
+            f"TEACHING STYLE: {teaching_style}\n"
+            f"TEACHING GUIDANCE:\n{teaching_guidance or 'Use the teaching style naturally and adapt to the student.'}\n\n"
+            f"STUDENT MEMORY:\n{memory_context or 'No stored memory available.'}\n\n"
             f"Question: {prompt}\n"
             "Answer:"
         )
@@ -224,7 +306,7 @@ class OllamaLLM:
                 r = requests.post(
                     self.generate_endpoint,
                     json={
-                        "model": self.model,
+                        "model": model_override or self.model,
                         "prompt": text,
                         "stream": False,
                         "options": {
@@ -257,14 +339,15 @@ class OllamaLLM:
     # ------------------------------------------------------------------ #
     def _is_greeting_prompt(self, prompt: str) -> bool:
         s = (prompt or "").strip().lower()
-        if not s: return True
-        if len(s) > 50: return False
+        if not s:
+            return True
+        if len(s) > 50:
+            return False
         
         greetings = {"hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank", "thankyou", "thx", "ty", "bye", "goodbye"}
         tokens = s.split()
         if tokens and tokens[0] in greetings:
             return True
-        return False
 
         casual = {"yaar", "buddy", "mate", "bruh", "dude"}
         acknowledgments = {"yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool", "no", "nah", "nope"}
@@ -285,27 +368,51 @@ class OllamaLLM:
 
         return False
 
-    def _greeting_response(self, prompt: str) -> str:
+    def _greeting_response_with_memory(self, prompt: str, memory_context: str = "") -> str:
         lower = (prompt or "").strip().lower()
+        name = self._extract_name_from_memory(memory_context)
+        goal = self._extract_goal_from_memory(memory_context)
+        salutation = f"Hello {name}!" if name else "Hello!"
+
         if any(t in lower for t in ("thanks", "thank you", "thx", "ty")):
-            return "You're most welcome! I'm glad I could help. Do you have any other questions?"
+            return f"{salutation} You're most welcome. I'm glad I could help."
         if any(t in lower for t in ("bye", "goodbye", "farewell", "see you", "see ya")):
-            return "Goodbye! Feel free to return if you need any more assistance with your files."
+            return "Goodbye! Feel free to return anytime."
         if any(t in lower for t in ("yes", "yeah", "yep", "ok", "okay", "k", "sure", "alright", "fine", "cool")):
-            return "Understood. Please let me know how you'd like to proceed or if you have another question."
+            return f"{salutation} Understood. Tell me what you'd like to continue with."
         if "morning" in lower:
-            return "Good morning! How can I assist you with your documents today?"
+            return f"Good morning{f' {name}' if name else ''}! How can I help today?"
         if "afternoon" in lower:
-            return "Good afternoon! What can I help you analyze today?"
+            return f"Good afternoon{f' {name}' if name else ''}! What would you like to work on?"
         if "evening" in lower:
-            return "Good evening! Is there anything you'd like me to look into for you?"
+            return f"Good evening{f' {name}' if name else ''}! What can I help you with?"
 
         # Casual greetings
         if any(c in lower for c in ("yaar", "buddy", "mate", "dude", "bruh")):
-            return "Hello! I'm here and ready to help. What's on your mind?"
+            return f"{salutation} I'm here and ready to help. What's on your mind?"
 
         # Default friendly greeting
-        return "Greetings! I am Smart File AI. I can answer general questions or analyze any documents you upload. How can I help you today?" 
+        if goal:
+            return f"{salutation} Great to see you again. Last time you wanted to {goal}. Shall we continue from there?"
+        return f"{salutation} Great to see you again. How can I help you today?"
+
+    def _greeting_response(self, prompt: str, memory_context: str = "") -> str:
+        return self._greeting_response_with_memory(prompt, memory_context=memory_context)
+
+    def _extract_name_from_memory(self, memory_context: str) -> str | None:
+        text = memory_context or ""
+        m = re.search(r"(?im)^\s*-\s*name\s*:\s*([A-Za-z][A-Za-z\-']{1,40})\s*$", text)
+        if not m:
+            return None
+        return m.group(1).strip().title()
+
+    def _extract_goal_from_memory(self, memory_context: str) -> str | None:
+        text = memory_context or ""
+        m = re.search(r"(?im)^\s*-\s*goals\s*:\s*(.+)$", text)
+        if not m:
+            return None
+        raw = m.group(1).strip()
+        return raw.split(",")[0].strip() if raw else None
 
     def _clean_response(self, text: str) -> str:
         """Removes trailing refusal appendages generated by over-aligned models."""
@@ -321,6 +428,16 @@ class OllamaLLM:
         ]
         
         cleaned = text or ""
+
+        # Strip blackboard/internal reasoning markers if emitted by the model.
+        cleaned = re.sub(r"\[/?BLACKBOARD_STEP[^\]]*\]", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"(?im)^\s*(student memory|student profile|conversation state|relevant past memory)\s*:\s*$", "", cleaned)
+        cleaned = re.sub(r"(?im)^\s*(internal reasoning|scratchpad|analysis)\s*:\s*$", "", cleaned)
+        cleaned = re.sub(r"(?im)^\s*(internal reasoning|scratchpad|analysis|debug|trace)\s*:\s*.*$", "", cleaned)
+        cleaned = re.sub(r"(?im)^\s*-\s*(follow-up detected|current entities|active entities from prior chats)\s*:.*$", "", cleaned)
+        cleaned = re.sub(r"(?im)^\s*memory\s+\d+\s*\[[^\]]*\]\s*:\s*", "", cleaned)
+        cleaned = re.sub(r"(?im)\b(score|weak_signal|retrieved documents|timings?)\b\s*[:=].*$", "", cleaned)
+        cleaned = re.sub(r"(?im)\b(chain of thought|chain-of-thought|cot|reasoning trace|thinking:)\b.*$", "", cleaned)
 
         # Strip "function call"/tool artifacts some models emit
         # Examples seen:
