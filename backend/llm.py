@@ -220,7 +220,7 @@ class OllamaLLM:
                     "options": {
                         "temperature": temperature,
                         "top_p": 0.9,
-                        "num_predict": 1024,
+                            "num_predict": 512,
                     },
                 },
                 timeout=30,  # Fast response timeout
@@ -305,7 +305,7 @@ class OllamaLLM:
                         "options": {
                             "temperature": temp,
                             "top_p": 0.9,
-                            "num_predict": 768,
+                            "num_predict": 256,
                         },
                     },
                     timeout=30,
@@ -317,10 +317,6 @@ class OllamaLLM:
 
             if generated and len(generated) > 10 and not self._is_refusal(generated):
                 return generated
-
-            # Fallback retry with even more direct phrasing
-            retry_prompt = f"Provide a direct definition of '{prompt}'."
-            return _call_ollama(retry_prompt, 0.25)
         except Exception as e:
             print(f"[Ollama General Exception] {e}")
             pass
