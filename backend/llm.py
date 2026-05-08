@@ -195,18 +195,11 @@ class OllamaLLM:
         language_directive = f"RESPOND IN {lang_name.upper()} ({response_lang.upper()}) ONLY.\n"
 
         system_message = (
-            "You are Smart File AI, an expert analytical assistant. Your goal is to provide high-quality answers derived EXCLUSIVELY from the provided DOCUMENT CONTEXT.\n"
-            "You may use STUDENT MEMORY for continuity, personalization, and to understand prior attempts, but document facts must still come only from the document context.\n\n"
+            "You are Smart File AI. Provide direct answers from DOCUMENT CONTEXT only.\n"
             f"{language_directive}"
-            f"TEACHING STYLE: {teaching_style}\n"
-            f"TEACHING GUIDANCE:\n{teaching_guidance or 'Use the teaching style naturally and adapt to the student.'}\n\n"
-            "RULES:\n"
-            "1. ANSWER-FIRST: Start your response with the most direct answer to the question. Avoid introductory phrases.\n"
-            "2. CITATIONS: Every claim or fact MUST be cited immediately using brackets, e.g., [Source 1], [Source 2]. Use the labels provided in the context.\n"
-            "3. NO HALLUCINATION: If the answer is not in the context, state: 'I'm sorry, but the provided documents do not contain information to answer this question.'\n"
-            "4. FORMATTING: Use Markdown (bolding, lists) for readability.\n"
-            "5. NEVER reveal internal notes, memory metadata, scores, hidden reasoning, or analysis traces.\n"
-            f"STYLE: {depth_instruction}"
+            f"STYLE: {teaching_style}\n"
+            f"{depth_instruction}\n"
+            "RULES: 1) Answer first. 2) Cite [Source N]. 3) No hallucination. 4) Be concise."
         )
 
         prompt_payload = (
@@ -227,10 +220,10 @@ class OllamaLLM:
                     "options": {
                         "temperature": temperature,
                         "top_p": 0.9,
-                        "num_predict": 2500,
+                        "num_predict": 1024,
                     },
                 },
-                timeout=60,  # Reduced timeout for better responsiveness
+                timeout=30,  # Fast response timeout
             )
             if response.status_code != 200:
                 print(f"[Ollama Error] {response.status_code}: {response.text}")
@@ -312,10 +305,10 @@ class OllamaLLM:
                         "options": {
                             "temperature": temp,
                             "top_p": 0.9,
-                            "num_predict": 1200,
+                            "num_predict": 768,
                         },
                     },
-                    timeout=120,
+                    timeout=30,
                 )
                 r.raise_for_status()
                 return self._clean_response(r.json().get("response", "").strip())

@@ -48,8 +48,8 @@ else:
 # ------------------------------------------------------------------ #
 llm = OllamaLLM(model="functiongemma", embedding_model="all-minilm")
 
-# Auto-detect the best available Ollama model
-_PREFERRED_MODELS = ["llama3.2", "llama3", "llama3.1", "mistral", "gemma", "gemma2", "phi3", "phi", "functiongemma"]
+# Auto-detect the best available Ollama model (prioritize speed)
+_PREFERRED_MODELS = ["phi3", "phi", "gemma2", "llama3.2", "mistral", "llama3", "llama3.1", "gemma", "functiongemma"]
 _available_models = llm.list_available_models()
 if _available_models:
     _chosen = None
@@ -73,10 +73,10 @@ student_memory_store = StudentMemoryStore(
 rag = RAGPipeline(
     llm=llm,
     db=db,
-    chunk_size=600,
-    chunk_overlap=120,
-    num_retrieval=3,
-    relevance_threshold=0.45,
+    chunk_size=400,
+    chunk_overlap=80,
+    num_retrieval=2,
+    relevance_threshold=0.5,
 )
 conversation_logger = ConversationLogger(log_dir="./logs")
 indexed_files_store = JsonPersistence("./data/indexed_files.json", {"files": []})
